@@ -10,10 +10,50 @@ from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 load_dotenv()
+
+
+class LLMConfig(BaseModel):
+    """Configuration for LLM provider selection and parameters."""
+    
+    provider: str = Field(
+        default="ollama",
+        description="LLM provider: 'ollama', 'openai', 'gemini', 'copilot'"
+    )
+    model: str = Field(
+        default="llama3",
+        description="Model name (provider-specific)"
+    )
+    temperature: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=2.0,
+        description="Sampling temperature for generation"
+    )
+    max_tokens: int = Field(
+        default=2048,
+        ge=100,
+        description="Maximum tokens in response"
+    )
+    
+    def get_provider_kwargs(self) -> dict:
+        """Get provider-specific kwargs for create_provider()."""
+        return {
+            "model": self.model,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+        }
+    
+    @field_validator("provider")
+    @classmethod
+    def validate_provider(cls, v: str) -> str:
+        valid = {"ollama", "openai", "gemini", "copilot"}
+        if v not in valid:
+            raise ValueError(f"Provider must be one of {valid}, got {v}")
+        return v.lower()
 
 
 class OpenAIConfig(BaseModel):
@@ -45,6 +85,7 @@ class MCPConfig(BaseModel):
 class AgentConfig(BaseModel):
     """Main Chat Agent configuration."""
     
+    llm: LLMConfig = Field(default_factory=LLMConfig)
     openai: OpenAIConfig = Field(default_factory=OpenAIConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     
