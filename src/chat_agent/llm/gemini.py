@@ -1,33 +1,36 @@
 import os
+import warnings
 from typing import Any, AsyncGenerator, Optional
 
+# Suppress FutureWarning from deprecated google.generativeai
+warnings.filterwarnings("ignore", category=FutureWarning)
+
 import google.generativeai as genai
-from google.ai.generativelanguage import Content, Part
 
 from .base import LLMProvider, LLMConfigurationError, LLMProviderError, LLMResponse, ToolCall
 
 
 class GeminiProvider(LLMProvider):
-    """Google Gemini LLM provider."""
+    """Google Gemini / AI Studio API provider."""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "gemini-1.5-flash"):
-        api_key = api_key or os.getenv("GEMINI_API_KEY")
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "gemini-1.5-flash",
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ):
+        api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         if not api_key:
-            raise LLMConfigurationError("GEMINI_API_KEY environment variable not set")
+            raise LLMConfigurationError("GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set")
 
-        genai.configure(api_key=api_key)
+        # Set API key via environment or direct parameter
+        genai.api_key = api_key
         self.api_key = api_key
         self.model = model
-        self.client = genai.GenerativeModel(
-            model,
-            safety_settings=[
-                {"category": "HARM_CATEGORY_UNSPECIFIED", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_SEXUAL_CONTENT", "threshold": "BLOCK_NONE"},
-            ],
-        )
+        self.temperature = temperature or 0.7
+        self.max_tokens = max_tokens or 2048
+        self.client = genai.GenerativeModel(model)
 
     @property
     def name(self) -> str:
@@ -40,57 +43,170 @@ class GeminiProvider(LLMProvider):
     def is_configured(self) -> bool:
         return bool(self.api_key)
 
+    def _to_contents(self, messages: list[dict[str, str]]) -> list[dict[str, Any]]:
+        contents: list[dict[str, Any]] = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            mapped_role = "user" if role in {"user", "system"} else "model"
+            contents.append(
+                {
+                    "role": mapped_role,
+                    "parts": [{"text": msg.get("content", "")}],
+                }
+            )
+        return contents
+
+    def _convert_tools_to_gemini(self, tools: list[dict[str, Any]]) -> dict[str, Any]:
+        """Convert tool definitions to Gemini format (single tools object)."""
+        function_declarations = []
+        for tool in tools:
+            function_declarations.append({
+                "name": tool.get("name", ""),
+                "description": tool.get("description", ""),
+                "parameters": tool.get("parameters", {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }),
+            })
+        
+        return {
+            "function_declarations": function_declarations
+        }
+
+    def _to_plain_value(self, value: Any) -> Any:
+        """Convert protobuf/map/repeated values into plain Python JSON-safe values."""
+        if isinstance(value, dict):
+            return {str(k): self._to_plain_value(v) for k, v in value.items()}
+
+        if hasattr(value, "ListFields"):
+            return {
+                getattr(field, "name", str(field)): self._to_plain_value(field_value)
+                for field, field_value in value.ListFields()
+            }
+
+        if hasattr(value, "items") and not isinstance(value, (str, bytes)):
+            try:
+                return {str(k): self._to_plain_value(v) for k, v in value.items()}
+            except TypeError:
+                pass
+
+        if hasattr(value, "__iter__") and not isinstance(value, (str, bytes)):
+            try:
+                return [self._to_plain_value(item) for item in value]
+            except TypeError:
+                pass
+
+        return value
+
+    def _extract_tool_calls(self, response: Any) -> list[ToolCall]:
+        """Extract tool calls from Gemini response."""
+        tool_calls = []
+        
+        # Check if response has candidates with function calls
+        if not hasattr(response, "candidates") or not response.candidates:
+            return tool_calls
+        
+        call_id = 0
+        for candidate in response.candidates:
+            if not hasattr(candidate, "content") or not candidate.content:
+                continue
+            
+            if not hasattr(candidate.content, "parts"):
+                continue
+            
+            for part in candidate.content.parts:
+                # Check if part is a function call
+                if hasattr(part, "function_call") and part.function_call:
+                    func_call = part.function_call
+                    call_id += 1
+                    
+                    # Extract arguments - handle both protobuf and dict forms
+                    arguments = {}
+                    if hasattr(func_call, "args"):
+                        plain_args = self._to_plain_value(func_call.args)
+                        if isinstance(plain_args, dict):
+                            arguments = plain_args
+                    
+                    tool_calls.append(
+                        ToolCall(
+                            id=str(call_id),
+                            name=getattr(func_call, "name", ""),
+                            arguments=arguments,
+                        )
+                    )
+        
+        return tool_calls
+
+    def _extract_text(self, response: Any) -> str:
+        """Extract text parts safely without touching response.text."""
+        texts: list[str] = []
+
+        candidates = getattr(response, "candidates", None) or []
+        for candidate in candidates:
+            content = getattr(candidate, "content", None)
+            if not content:
+                continue
+            parts = getattr(content, "parts", None) or []
+            for part in parts:
+                part_text = getattr(part, "text", None)
+                if part_text:
+                    texts.append(part_text)
+
+        return "\n".join(texts).strip()
+
+    def _usage_from_response(self, response: Any) -> dict[str, int]:
+        usage = getattr(response, "usage_metadata", None)
+        usage_dict = usage if isinstance(usage, dict) else {}
+
+        prompt_tokens = int(
+            getattr(usage, "prompt_token_count", 0)
+            or usage_dict.get("prompt_token_count", 0)
+            or 0
+        )
+        completion_tokens = int(
+            getattr(usage, "candidates_token_count", 0)
+            or usage_dict.get("candidates_token_count", 0)
+            or usage_dict.get("output_token_count", 0)
+            or 0
+        )
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+        }
+
     def complete_sync(
         self,
         messages: list[dict[str, str]],
         tools: Optional[list[dict[str, Any]]] = None,
     ) -> LLMResponse:
-        """Generate synchronous completion using Gemini."""
         try:
-            contents = []
-            for msg in messages:
-                role = "user" if msg.get("role") == "user" else "model"
-                contents.append(Content(role=role, parts=[Part.from_text(msg.get("content", ""))]))
-
-            tool_config = None
-            if tools:
-                tool_config = {
-                    "function_declarations": [
-                        {
-                            "name": tool.get("name"),
-                            "description": tool.get("description", ""),
-                            "parameters": tool.get("parameters", {}),
-                        }
-                        for tool in tools
-                    ]
-                }
-
+            kwargs = {
+                "stream": False,
+                "generation_config": genai.types.GenerationConfig(
+                    temperature=self.temperature,
+                    max_output_tokens=self.max_tokens,
+                ),
+            }
+            
+            # Add tools if provided
+            if tools and self.supports_tools:
+                gemini_tools = self._convert_tools_to_gemini(tools)
+                kwargs["tools"] = gemini_tools
+            
             response = self.client.generate_content(
-                contents,
-                tools=[tool_config] if tool_config else None,
-                stream=False,
+                self._to_contents(messages),
+                **kwargs,
             )
-
-            tool_calls = []
-            if hasattr(response, "candidates") and response.candidates:
-                for part in response.candidates[0].content.parts:
-                    if hasattr(part, "function_call"):
-                        tool_calls.append(
-                            ToolCall(
-                                id="",
-                                name=part.function_call.name,
-                                arguments=dict(part.function_call.args),
-                            )
-                        )
-
+            
+            # Extract tool calls if any
+            tool_calls = self._extract_tool_calls(response) if tools else []
+            
             return LLMResponse(
-                text=response.text or "",
+                text=self._extract_text(response),
                 tool_calls=tool_calls,
                 model=self.model,
-                usage={
-                    "prompt_tokens": getattr(response.usage_metadata, "prompt_token_count", 0),
-                    "completion_tokens": getattr(response.usage_metadata, "candidates_token_count", 0),
-                },
+                usage=self._usage_from_response(response),
             )
         except Exception as e:
             raise LLMProviderError(f"Gemini request failed: {e}") from e
@@ -100,52 +216,33 @@ class GeminiProvider(LLMProvider):
         messages: list[dict[str, str]],
         tools: Optional[list[dict[str, Any]]] = None,
     ) -> LLMResponse:
-        """Generate asynchronous completion using Gemini."""
         try:
-            contents = []
-            for msg in messages:
-                role = "user" if msg.get("role") == "user" else "model"
-                contents.append(Content(role=role, parts=[Part.from_text(msg.get("content", ""))]))
-
-            tool_config = None
-            if tools:
-                tool_config = {
-                    "function_declarations": [
-                        {
-                            "name": tool.get("name"),
-                            "description": tool.get("description", ""),
-                            "parameters": tool.get("parameters", {}),
-                        }
-                        for tool in tools
-                    ]
-                }
-
+            kwargs = {
+                "stream": False,
+                "generation_config": genai.types.GenerationConfig(
+                    temperature=self.temperature,
+                    max_output_tokens=self.max_tokens,
+                ),
+            }
+            
+            # Add tools if provided
+            if tools and self.supports_tools:
+                gemini_tools = self._convert_tools_to_gemini(tools)
+                kwargs["tools"] = gemini_tools
+            
             response = await self.client.generate_content_async(
-                contents,
-                tools=[tool_config] if tool_config else None,
-                stream=False,
+                self._to_contents(messages),
+                **kwargs,
             )
-
-            tool_calls = []
-            if hasattr(response, "candidates") and response.candidates:
-                for part in response.candidates[0].content.parts:
-                    if hasattr(part, "function_call"):
-                        tool_calls.append(
-                            ToolCall(
-                                id="",
-                                name=part.function_call.name,
-                                arguments=dict(part.function_call.args),
-                            )
-                        )
-
+            
+            # Extract tool calls if any
+            tool_calls = self._extract_tool_calls(response) if tools else []
+            
             return LLMResponse(
-                text=response.text or "",
+                text=self._extract_text(response),
                 tool_calls=tool_calls,
                 model=self.model,
-                usage={
-                    "prompt_tokens": getattr(response.usage_metadata, "prompt_token_count", 0),
-                    "completion_tokens": getattr(response.usage_metadata, "candidates_token_count", 0),
-                },
+                usage=self._usage_from_response(response),
             )
         except Exception as e:
             raise LLMProviderError(f"Gemini request failed: {e}") from e
@@ -155,32 +252,18 @@ class GeminiProvider(LLMProvider):
         messages: list[dict[str, str]],
         tools: Optional[list[dict[str, Any]]] = None,
     ) -> AsyncGenerator[str, None]:
-        """Stream completion from Gemini."""
         try:
-            contents = []
-            for msg in messages:
-                role = "user" if msg.get("role") == "user" else "model"
-                contents.append(Content(role=role, parts=[Part.from_text(msg.get("content", ""))]))
-
-            tool_config = None
-            if tools:
-                tool_config = {
-                    "function_declarations": [
-                        {
-                            "name": tool.get("name"),
-                            "description": tool.get("description", ""),
-                            "parameters": tool.get("parameters", {}),
-                        }
-                        for tool in tools
-                    ]
-                }
-
-            async for chunk in await self.client.generate_content_async(
-                contents,
-                tools=[tool_config] if tool_config else None,
+            stream_response = await self.client.generate_content_async(
+                self._to_contents(messages),
                 stream=True,
-            ):
-                if chunk.text:
-                    yield chunk.text
+                generation_config=genai.types.GenerationConfig(
+                    temperature=self.temperature,
+                    max_output_tokens=self.max_tokens,
+                ),
+            )
+            async for chunk in stream_response:
+                text = self._extract_text(chunk)
+                if text:
+                    yield text
         except Exception as e:
             raise LLMProviderError(f"Gemini streaming failed: {e}") from e

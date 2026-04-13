@@ -5,6 +5,7 @@ description = "JARVIS Chat Client - Processes voice transcripts and routes to MC
 requires-python = ">=3.13"
 dependencies = [
     "asyncio>=4.0.0",
+    "google-generativeai>=0.8.5",
     "httpx>=0.28.1",
     "openai>=2.30.0",
     "pydantic>=2.12.5",
@@ -13,15 +14,3 @@ dependencies = [
 
 [project.optional-dependencies]
 http = ["httpx>=0.28.0"]
-dev = ["pytest>=8.0.0", "pytest-asyncio>=0.24.0"]
-
-[dependency-groups]
-dev = [
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.24.0",
-]
-
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-testpaths = ["tests"]
-

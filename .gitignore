@@ -12,3 +12,6 @@ wheels/
 # Environment variables
 .env
 .env.local
+
+# Cache files (tokens, credentials)
+.cache

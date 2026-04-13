@@ -2,12 +2,41 @@ from typing import Any
 
 from .base import LLMProvider, LLMProviderError
 
-PROVIDER_MODULES = {
-    "ollama": "chat_agent.llm.ollama",
-    "openai": "chat_agent.llm.openai",
-    "gemini": "chat_agent.llm.gemini",
-    "copilot": "chat_agent.llm.copilot",
-}
+# Lazy imports - only load what's needed
+PROVIDER_CLASSES = {}
+
+
+def _load_provider(name: str):
+    """Lazy load provider class."""
+    if name in PROVIDER_CLASSES:
+        return PROVIDER_CLASSES[name]
+    
+    try:
+        if name == "ollama":
+            from .ollama import OllamaProvider
+            PROVIDER_CLASSES["ollama"] = OllamaProvider
+        elif name == "openai":
+            from .openai import OpenAIProvider
+            PROVIDER_CLASSES["openai"] = OpenAIProvider
+        elif name == "gemini":
+            from .gemini import GeminiProvider
+            PROVIDER_CLASSES["gemini"] = GeminiProvider
+        elif name == "copilot":
+            from .copilot import CopilotProvider
+            PROVIDER_CLASSES["copilot"] = CopilotProvider
+        else:
+            raise LLMProviderError(f"Unknown provider: {name}")
+        
+        return PROVIDER_CLASSES[name]
+    except ImportError as e:
+        raise LLMProviderError(
+            f"Provider '{name}' not available. Install required dependencies:\n"
+            f"  ollama: no extra deps needed\n"
+            f"  openai: pip install openai\n"
+            f"  gemini: pip install google-generativeai\n"
+            f"  copilot: Copilot CLI (https://github.com/github/copilot-cli)\n"
+            f"Error: {e}"
+        ) from e
 
 
 def create_provider(name: str, **kwargs) -> LLMProvider:
@@ -24,34 +53,13 @@ def create_provider(name: str, **kwargs) -> LLMProvider:
     Raises:
         LLMProviderError: If provider name is unknown or creation fails
     """
-    if name not in PROVIDER_MODULES:
-        raise LLMProviderError(
-            f"Unknown provider: {name}. Available providers: {', '.join(PROVIDER_MODULES.keys())}"
-        )
-
-    module_path = PROVIDER_MODULES[name]
-
     try:
-        parts = module_path.rsplit(".", 1)
-        module_name = parts[-1]
-        import_path = parts[0]
-
-        module = __import__(import_path, fromlist=[module_name])
-
-        class_name = "".join(word.capitalize() for word in module_name.split("_")) + "Provider"
-        provider_class = getattr(module, class_name, None)
-
-        if not provider_class:
-            raise LLMProviderError(f"Provider class {class_name} not found in {import_path}")
-
+        provider_class = _load_provider(name)
         return provider_class(**kwargs)
-
-    except ImportError as e:
-        raise LLMProviderError(f"Failed to import {name} provider: {e}") from e
     except TypeError as e:
         raise LLMProviderError(f"Failed to instantiate {name} provider: {e}") from e
 
 
 def get_available_providers() -> list[str]:
     """Get list of available provider names."""
-    return list(PROVIDER_MODULES.keys())
+    return ["ollama", "openai", "gemini", "copilot"]

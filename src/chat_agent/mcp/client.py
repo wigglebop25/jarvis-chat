@@ -1,15 +1,40 @@
 from typing import Any, Optional
+import os
+import json
 
 import httpx
 
 from .models import MCPRequest, MCPResponse
 
 
+def _serialize_protobuf(obj: Any) -> Any:
+    """Convert protobuf objects to JSON-serializable format."""
+    if isinstance(obj, dict):
+        return {str(k): _serialize_protobuf(v) for k, v in obj.items()}
+
+    if hasattr(obj, "ListFields"):
+        # Protobuf message: ListFields returns (FieldDescriptor, value) tuples.
+        return {
+            getattr(field, "name", str(field)): _serialize_protobuf(value)
+            for field, value in obj.ListFields()
+        }
+
+    if hasattr(obj, "__iter__") and not isinstance(obj, (str, bytes)):
+        # Iterable (list, repeated field, etc.)
+        try:
+            return [_serialize_protobuf(item) for item in obj]
+        except TypeError:
+            return obj
+
+    return obj
+
+
 class MCPClient:
     """HTTP client for JSON-RPC communication with MCP server."""
 
-    def __init__(self, base_url: str = "http://localhost:8000", timeout: int = 30):
-        self.base_url = base_url.rstrip("/")
+    def __init__(self, base_url: Optional[str] = None, timeout: int = 30):
+        resolved_base_url = base_url or os.getenv("MCP_SERVER_URL", "http://127.0.0.1:5050")
+        self.base_url = resolved_base_url.rstrip("/")
         self.timeout = timeout
         self.client = httpx.AsyncClient(timeout=timeout)
         self._request_id = 0
@@ -19,7 +44,7 @@ class MCPClient:
         method: str,
         params: Optional[dict[str, Any]] = None,
         timeout: Optional[int] = None,
-    ) -> dict[str, Any]:
+    ) -> Any:
         """
         Call a method on the MCP server.
 
@@ -33,14 +58,14 @@ class MCPClient:
         """
         self._request_id += 1
         request = MCPRequest(
-            id=self._request_id,
+            id=str(self._request_id),
             method=method,
             params=params or {},
         )
 
         try:
             response = await self.client.post(
-                f"{self.base_url}/rpc",
+                f"{self.base_url}/jsonrpc",
                 json=request.model_dump(),
                 timeout=timeout or self.timeout,
             )
@@ -55,7 +80,9 @@ class MCPClient:
                     f"{rpc_response.error.get('message')}"
                 )
 
-            return rpc_response.result or {}
+            # Serialize protobuf objects to JSON-safe format
+            result = rpc_response.result if rpc_response.result is not None else {}
+            return _serialize_protobuf(result)
 
         except httpx.HTTPError as e:
             raise RuntimeError(f"MCP request failed: {e}") from e

@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any, Optional
 
 from .client import MCPClient
@@ -5,10 +6,10 @@ from .models import MCPToolResult
 
 
 class MCPRouter:
-    """Routes tool execution to MCP server with fallback to direct execution."""
+    """Routes tool execution to MCP server with optional fallback behavior."""
 
-    def __init__(self, mcp_client: Optional[MCPClient] = None, fallback_enabled: bool = True):
-        self.mcp_client = mcp_client
+    def __init__(self, mcp_client: Optional[MCPClient] = None, fallback_enabled: bool = False):
+        self.mcp_client = mcp_client or MCPClient()
         self.fallback_enabled = fallback_enabled
 
     async def execute_tool(
@@ -17,29 +18,21 @@ class MCPRouter:
         **kwargs,
     ) -> MCPToolResult:
         """
-        Execute a tool via MCP server with fallback.
-
-        Args:
-            name: Tool name
-            **kwargs: Tool arguments
-
-        Returns:
-            MCPToolResult with result or error
+        Execute a tool through MCP JSON-RPC and optionally fall back to direct execution.
         """
         if self.mcp_client:
             try:
                 result = await self.mcp_client.call(
-                    method="tools.execute",
+                    method="tools/call",
                     params={
                         "name": name,
                         "arguments": kwargs,
                     },
                 )
                 return MCPToolResult(result=result)
-            except Exception as e:
+            except Exception as exc:
                 if not self.fallback_enabled:
-                    return MCPToolResult(error=str(e), is_error=True)
-                # Fall through to direct execution
+                    return MCPToolResult(error=str(exc), is_error=True)
 
         if self.fallback_enabled:
             return await self._execute_direct(name, kwargs)
@@ -54,70 +47,48 @@ class MCPRouter:
         name: str,
         **kwargs,
     ) -> MCPToolResult:
-        """
-        Execute a tool synchronously with fallback.
+        """Synchronous execution wrapper."""
+        try:
+            running_loop = asyncio.get_running_loop()
+            if running_loop.is_running():
+                return MCPToolResult(
+                    error="Cannot execute sync tool call while event loop is running",
+                    is_error=True,
+                )
+        except RuntimeError:
+            pass
 
-        Args:
-            name: Tool name
-            **kwargs: Tool arguments
+        return asyncio.run(self.execute_tool(name, **kwargs))
 
-        Returns:
-            MCPToolResult with result or error
-        """
-        if self.fallback_enabled:
-            return self._execute_direct_sync(name, kwargs)
+    async def list_tools(self) -> list[dict[str, Any]]:
+        """List tools from MCP server."""
+        if not self.mcp_client:
+            return []
+        try:
+            result = await self.mcp_client.call(method="tools/list", params={})
+            if isinstance(result, dict):
+                tools = result.get("tools", [])
+                return tools if isinstance(tools, list) else []
+        except Exception:
+            return []
+        return []
 
-        return MCPToolResult(
-            error="No MCP server available and fallback disabled",
-            is_error=True,
-        )
+    async def health_check(self) -> bool:
+        """Check MCP server health."""
+        if not self.mcp_client:
+            return False
+        return await self.mcp_client.health_check()
 
     async def _execute_direct(
         self,
         name: str,
         arguments: dict[str, Any],
     ) -> MCPToolResult:
-        """Direct tool execution without MCP server."""
-        try:
-            if name == "get_system_info":
-                import psutil
-
-                return MCPToolResult(
-                    result={
-                        "cpu_percent": psutil.cpu_percent(),
-                        "memory_percent": psutil.virtual_memory().percent,
-                        "disk_percent": psutil.disk_usage("/").percent,
-                    }
-                )
-
-            return MCPToolResult(
-                error=f"Unknown tool: {name}",
-                is_error=True,
-            )
-        except Exception as e:
-            return MCPToolResult(error=str(e), is_error=True)
-
-    def _execute_direct_sync(
-        self,
-        name: str,
-        arguments: dict[str, Any],
-    ) -> MCPToolResult:
-        """Synchronous direct tool execution without MCP server."""
-        try:
-            if name == "get_system_info":
-                import psutil
-
-                return MCPToolResult(
-                    result={
-                        "cpu_percent": psutil.cpu_percent(),
-                        "memory_percent": psutil.virtual_memory().percent,
-                        "disk_percent": psutil.disk_usage("/").percent,
-                    }
-                )
-
-            return MCPToolResult(
-                error=f"Unknown tool: {name}",
-                is_error=True,
-            )
-        except Exception as e:
-            return MCPToolResult(error=str(e), is_error=True)
+        """All tools must be executed through MCP server - no embedded fallback."""
+        return MCPToolResult(
+            error=(
+                f"Tool '{name}' requires MCP server connection. "
+                "Start jarvis-skills MCP server: cd jarvis-skills && python src/jarvis_skills/server.py"
+            ),
+            is_error=True,
+        )

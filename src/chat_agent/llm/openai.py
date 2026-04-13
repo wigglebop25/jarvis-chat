@@ -10,13 +10,15 @@ from .base import LLMProvider, LLMConfigurationError, LLMProviderError, LLMRespo
 class OpenAIProvider(LLMProvider):
     """OpenAI LLM provider."""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4-turbo"):
+    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4o-mini", temperature: Optional[float] = None, max_tokens: Optional[int] = None):
         api_key = api_key or os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise LLMConfigurationError("OPENAI_API_KEY environment variable not set")
 
         self.api_key = api_key
         self.model = model
+        self.temperature = temperature or 0.7
+        self.max_tokens = max_tokens or 2048
         self.client = OpenAI(api_key=api_key)
         self.async_client = AsyncOpenAI(api_key=api_key)
 
@@ -95,6 +97,8 @@ class OpenAIProvider(LLMProvider):
             kwargs: dict[str, Any] = {
                 "model": self.model,
                 "messages": messages,
+                "temperature": self.temperature,
+                "max_tokens": self.max_tokens,
             }
 
             if tools:

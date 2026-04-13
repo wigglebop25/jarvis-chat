@@ -11,29 +11,64 @@ def get_tool_definitions() -> list[dict]:
     return [
         {
             "name": "get_system_info",
-            "description": "Get current system information including CPU, memory, and disk usage",
+            "description": (
+                "Get system information including CPU usage, RAM, storage, and network status."
+            ),
             "parameters": {
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "include": {
+                        "type": "array",
+                        "description": "Optional sections: cpu, ram, storage, network.",
+                        "items": {"type": "string"},
+                    }
+                },
                 "required": [],
             },
         },
         {
             "name": "control_volume",
-            "description": "Control system volume (get, set, mute, unmute)",
+            "description": "Control system volume (get, set, up, down, mute, unmute).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "description": "Action to perform: 'get', 'set', 'mute', 'unmute'",
-                        "enum": ["get", "set", "mute", "unmute"],
+                        "description": "Action to perform.",
+                        "enum": ["get", "set", "up", "down", "mute", "unmute"],
                     },
                     "level": {
-                        "type": "number",
-                        "description": "Volume level (0-100) for 'set' action",
-                        "minimum": 0,
-                        "maximum": 100,
+                        "type": "integer",
+                        "description": "Volume level (0-100) when action is set.",
+                    },
+                    "step": {
+                        "type": "integer",
+                        "description": "Step size for up/down actions.",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+        {
+            "name": "control_spotify",
+            "description": (
+                "Control Spotify playback (play, pause, next, previous, current, search)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "description": "Playback action to execute.",
+                        "enum": ["play", "pause", "next", "previous", "current", "search"],
+                    },
+                    "uri": {
+                        "type": "string",
+                        "description": "Optional Spotify URI to play.",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Search query when action is search.",
                     },
                 },
                 "required": ["action"],
@@ -41,72 +76,55 @@ def get_tool_definitions() -> list[dict]:
         },
         {
             "name": "toggle_network",
-            "description": "Get network status or toggle WiFi/Bluetooth",
+            "description": "Enable or disable WiFi, Bluetooth, or Ethernet.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "action": {
+                    "interface": {
                         "type": "string",
-                        "description": "Action to perform: 'status', 'wifi_toggle', 'bluetooth_toggle'",
-                        "enum": ["status", "wifi_toggle", "bluetooth_toggle"],
+                        "description": "Network interface to control.",
+                        "enum": ["wifi", "bluetooth", "ethernet"],
+                    },
+                    "enable": {
+                        "type": "boolean",
+                        "description": "True to enable, false to disable.",
                     },
                 },
-                "required": ["action"],
+                "required": ["interface", "enable"],
             },
         },
         {
-            "name": "search_web",
-            "description": "Search the web for information",
+            "name": "organize_folder",
+            "description": (
+                "Organize files in a folder by extension, type, or date "
+                "within allowlisted directories."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {
+                    "path": {
                         "type": "string",
-                        "description": "Search query",
+                        "description": "Folder path to organize.",
                     },
-                    "num_results": {
-                        "type": "number",
-                        "description": "Number of results to return",
-                        "default": 5,
-                        "minimum": 1,
-                        "maximum": 20,
+                    "strategy": {
+                        "type": "string",
+                        "description": "Organization strategy.",
+                        "enum": ["extension", "type", "date"],
+                    },
+                    "recursive": {
+                        "type": "boolean",
+                        "description": "Include nested files.",
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "Preview only without moving files.",
+                    },
+                    "include_hidden": {
+                        "type": "boolean",
+                        "description": "Include hidden files.",
                     },
                 },
-                "required": ["query"],
-            },
-        },
-        {
-            "name": "play_music",
-            "description": "Play music on Spotify or system player",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Song, artist, or playlist to play",
-                    },
-                    "provider": {
-                        "type": "string",
-                        "description": "Music provider",
-                        "enum": ["spotify", "system"],
-                        "default": "spotify",
-                    },
-                },
-                "required": ["query"],
-            },
-        },
-        {
-            "name": "get_weather",
-            "description": "Get current weather for a location",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "location": {
-                        "type": "string",
-                        "description": "City name or coordinates",
-                    },
-                },
-                "required": ["location"],
+                "required": ["path"],
             },
         },
     ]

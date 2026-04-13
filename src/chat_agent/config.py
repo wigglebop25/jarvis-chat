@@ -12,6 +12,8 @@ from typing import Optional
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, field_validator
 
+from .context_dtype import SUPPORTED_CONTEXT_DTYPES
+
 
 load_dotenv()
 
@@ -20,11 +22,11 @@ class LLMConfig(BaseModel):
     """Configuration for LLM provider selection and parameters."""
     
     provider: str = Field(
-        default="ollama",
+        default_factory=lambda: os.getenv("LLM_PROVIDER", "ollama"),
         description="LLM provider: 'ollama', 'openai', 'gemini', 'copilot'"
     )
     model: str = Field(
-        default="llama3",
+        default_factory=lambda: os.getenv("LLM_MODEL", "llama3"),
         description="Model name (provider-specific)"
     )
     temperature: float = Field(
@@ -41,11 +43,14 @@ class LLMConfig(BaseModel):
     
     def get_provider_kwargs(self) -> dict:
         """Get provider-specific kwargs for create_provider()."""
-        return {
-            "model": self.model,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
-        }
+        kwargs = {"model": self.model}
+        
+        # Only add provider-specific params
+        if self.provider in ["openai", "gemini"]:
+            kwargs["temperature"] = self.temperature
+            kwargs["max_tokens"] = self.max_tokens
+        
+        return kwargs
     
     @field_validator("provider")
     @classmethod
@@ -100,13 +105,34 @@ You help users control their computer through voice commands. You can:
 - Provide helpful information and answers
 
 When the user asks you to do something, determine the appropriate action and respond naturally.
-If a task requires using a tool, indicate which tool should be used.
+If a task requires a tool, call the tool directly instead of describing which tool to use.
+Never output internal reasoning or tool-selection analysis to the user.
 
 Be concise, helpful, and friendly. Acknowledge commands and confirm actions."""
     )
     
     debug: bool = Field(default=False)
     log_transcripts: bool = Field(default=True)
+    session_id: str = Field(default_factory=lambda: os.getenv("CHAT_SESSION_ID", "default"))
+    context_cache_enabled: bool = Field(
+        default_factory=lambda: os.getenv("CONTEXT_CACHE_ENABLED", "true").lower() == "true"
+    )
+    context_cache_max_turns: int = Field(default=20, ge=4)
+    context_cache_summary_keep_last: int = Field(default=8, ge=2)
+    context_token_budget: int = Field(default=3000, ge=256)
+    context_dtype: str = Field(default_factory=lambda: os.getenv("CONTEXT_DTYPE", "fp16"))
+    context_cache_path: str = Field(default_factory=lambda: os.getenv("CONTEXT_CACHE_PATH", ""))
+    tool_retry_attempts: int = Field(default=2, ge=0)
+    tool_retry_backoff_seconds: float = Field(default=0.5, ge=0.0)
+
+    @field_validator("context_dtype")
+    @classmethod
+    def validate_context_dtype(cls, v: str) -> str:
+        normalized = v.lower().strip()
+        if normalized not in SUPPORTED_CONTEXT_DTYPES:
+            valid = sorted(SUPPORTED_CONTEXT_DTYPES)
+            raise ValueError(f"context_dtype must be one of {valid}, got '{v}'")
+        return normalized
 
 
 def load_config(env_file: Optional[Path] = None) -> AgentConfig:

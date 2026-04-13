@@ -65,18 +65,22 @@ AVAILABLE_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "control_spotify",
-            "description": "Control Spotify music playback. Play, pause, skip tracks, get current track info.",
+            "description": "Control Spotify playback (play, pause, next, previous, current, search).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["play", "pause", "next", "previous", "current", "toggle"],
+                        "enum": ["play", "pause", "next", "previous", "current", "search"],
                         "description": "The playback action to perform."
                     },
                     "uri": {
                         "type": "string",
                         "description": "Optional Spotify URI to play (track, album, or playlist)."
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Search query when action is 'search'."
                     }
                 },
                 "required": ["action"]
@@ -87,22 +91,59 @@ AVAILABLE_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "toggle_network",
-            "description": "Toggle WiFi, Bluetooth, or Airplane mode on/off.",
+            "description": "Enable or disable WiFi, Bluetooth, or Ethernet.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "device": {
+                    "interface": {
                         "type": "string",
-                        "enum": ["wifi", "bluetooth", "airplane"],
-                        "description": "Which network device to toggle."
+                        "enum": ["wifi", "bluetooth", "ethernet"],
+                        "description": "Which network interface to control."
                     },
-                    "state": {
-                        "type": "string",
-                        "enum": ["on", "off", "toggle"],
-                        "description": "Desired state. 'toggle' switches current state."
+                    "enable": {
+                        "type": "boolean",
+                        "description": "True to enable, false to disable."
                     }
                 },
-                "required": ["device"]
+                "required": ["interface", "enable"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "organize_folder",
+            "description": "Organize files in a folder by extension, type, or date.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Folder path to organize."
+                    },
+                    "strategy": {
+                        "type": "string",
+                        "enum": ["extension", "type", "date"],
+                        "default": "extension",
+                        "description": "Organization strategy."
+                    },
+                    "recursive": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Include nested files."
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Preview only without moving files."
+                    },
+                    "include_hidden": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Include hidden files."
+                    }
+                },
+                "required": ["path"]
             }
         }
     }
@@ -150,5 +191,12 @@ def format_tool_result_for_display(tool_name: str, result: Any) -> str:
         if "action" in result:
             return f"Spotify: {result['action']}"
         return str(result)
+
+    if tool_name == "organize_folder" and isinstance(result, dict):
+        if "error" in result:
+            return f"Folder organizer error: {result['error']}"
+        if result.get("dry_run", True):
+            return f"Folder organizer preview complete. Planned moves: {result.get('planned_moves', 0)}."
+        return f"Folder organization complete. Files moved: {result.get('moved_files', 0)}."
     
     return str(result)

@@ -6,6 +6,7 @@ Maps voice commands to actionable intents.
 """
 
 import re
+from pathlib import Path
 from typing import Optional
 
 from .models import Intent, IntentType
@@ -24,7 +25,7 @@ INTENT_PATTERNS: dict[IntentType, list[str]] = {
     IntentType.VOLUME_CONTROL: [
         r"(volume|sound)\s*(up|down|louder|quieter|higher|lower)",
         r"(turn|set)\s*(up|down)?\s*(the)?\s*volume",
-        r"^(mute|unmute)\s*(the)?\s*(sound|volume|audio)?$",
+        r"(mute|unmute)(\s+(the|my|the\s+)?)?(\s+(sound|volume|audio|music))?",
         r"(increase|decrease|raise|lower)\s*(the)?\s*volume",
         r"volume\s*(to|at)?\s*(\d+)",
         r"(set|change)\s*(the)?\s*volume\s*(to|at)?\s*(\d+)",
@@ -39,10 +40,16 @@ INTENT_PATTERNS: dict[IntentType, list[str]] = {
         r"resume\s*(music|playback|spotify)?",
     ],
     IntentType.NETWORK_TOGGLE: [
-        r"(turn|toggle|switch)\s*(on|off)\s*(the)?\s*(wifi|wi-fi|bluetooth|airplane)",
-        r"(enable|disable)\s*(the)?\s*(wifi|wi-fi|bluetooth|airplane)",
-        r"(wifi|wi-fi|bluetooth)\s*(on|off)",
-        r"(connect|disconnect)\s*(to)?\s*(wifi|wi-fi|bluetooth)?",
+        r"(turn|toggle|switch)\s*(on|off)\s*(the)?\s*(wifi|wi-fi|bluetooth|ethernet)",
+        r"(enable|disable)\s*(the)?\s*(wifi|wi-fi|bluetooth|ethernet)",
+        r"(wifi|wi-fi|bluetooth|ethernet)\s*(on|off)",
+        r"(connect|disconnect)\s*(to)?\s*(wifi|wi-fi|bluetooth|ethernet)?",
+    ],
+    IntentType.FILE_ORGANIZATION: [
+        r"(organize|clean|sort)\s*(my|the)?\s*(downloads|desktop|documents|folder|files)",
+        r"(organize|sort)\s*(files|folder)",
+        r"(clean up|tidy)\s*(downloads|desktop|documents|folder)?",
+        r"(arrange|group)\s*(files)\s*(by)?\s*(type|extension|date)",
     ],
 }
 
@@ -62,17 +69,34 @@ PARAMETER_EXTRACTORS = {
             (r"\b(pause|stop)\b", "pause"),
             (r"\b(next|skip)\b", "next"),
             (r"\bprevious\b", "previous"),
+            (r"(what('s| is)\s*playing|current\s*(track|song))", "current"),
         ],
     },
     IntentType.NETWORK_TOGGLE: {
         "device": [
             (r"\b(wifi|wi-fi)\b", "wifi"),
             (r"\bbluetooth\b", "bluetooth"),
-            (r"\bairplane\b", "airplane"),
+            (r"\bethernet\b", "ethernet"),
         ],
         "state": [
             (r"\b(on|enable|connect)\b", "on"),
             (r"\b(off|disable|disconnect)\b", "off"),
+        ],
+    },
+    IntentType.FILE_ORGANIZATION: {
+        "target_folder": [
+            (r"\bdownloads?\b", "downloads"),
+            (r"\bdesktop\b", "desktop"),
+            (r"\bdocuments?\b", "documents"),
+        ],
+        "strategy": [
+            (r"\b(date|month|year)\b", "date"),
+            (r"\b(type|category)\b", "type"),
+            (r"\b(extension|ext)\b", "extension"),
+        ],
+        "dry_run": [
+            (r"\b(preview|dry\s*run|simulate)\b", "true"),
+            (r"\b(now|apply|execute|do it)\b", "false"),
         ],
     },
 }
@@ -156,6 +180,7 @@ def get_tool_name_for_intent(intent: Intent) -> Optional[str]:
         IntentType.VOLUME_CONTROL: "control_volume",
         IntentType.MUSIC_CONTROL: "control_spotify",
         IntentType.NETWORK_TOGGLE: "toggle_network",
+        IntentType.FILE_ORGANIZATION: "organize_folder",
     }
     return tool_mapping.get(intent.type)
 
@@ -177,5 +202,16 @@ def map_intent_params_to_tool(intent: Intent) -> dict:
             params["interface"] = params.pop("device")
         if "state" in params:
             params["enable"] = params.pop("state") == "on"
+    elif intent.type == IntentType.FILE_ORGANIZATION:
+        folder_alias = params.pop("target_folder", "downloads")
+        home = Path.home()
+        alias_map = {
+            "downloads": home / "Downloads",
+            "desktop": home / "Desktop",
+            "documents": home / "Documents",
+        }
+        params["path"] = str(alias_map.get(folder_alias, home / "Downloads"))
+        params.setdefault("strategy", "extension")
+        params["dry_run"] = params.get("dry_run", "true") != "false"
     
     return params

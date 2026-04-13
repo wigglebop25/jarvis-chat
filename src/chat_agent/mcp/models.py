@@ -15,7 +15,7 @@ class MCPResponse(BaseModel):
     """JSON-RPC 2.0 response from MCP server."""
     jsonrpc: str = Field(default="2.0")
     id: Optional[int | str] = None
-    result: Optional[dict[str, Any]] = None
+    result: Optional[Any] = None
     error: Optional[dict[str, Any]] = None
 
 
