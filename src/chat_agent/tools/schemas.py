@@ -109,12 +109,6 @@ class ToolSchemaConverter:
         if "default" in prop_def:
             converted["default"] = prop_def["default"]
 
-        if "minimum" in prop_def:
-            converted["minimum"] = prop_def["minimum"]
-
-        if "maximum" in prop_def:
-            converted["maximum"] = prop_def["maximum"]
-
         if "items" in prop_def:
             converted["items"] = ToolSchemaConverter._convert_property(prop_def["items"])
 
