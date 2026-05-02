@@ -1,17 +1,29 @@
 # Python-generated files
 __pycache__/
-*.py[oc]
+*.pyc
+*.pyo
+*.egg-info/
 build/
 dist/
-wheels/
-*.egg-info
 
 # Virtual environments
 .venv
 
 # Environment variables
 .env
-.env.local
 
-# Cache files (tokens, credentials)
+# Cache files
 .cache
+
+# Editor metadata
+.vscode/
+
+# Runtime logs
+*.log
+*.out.log
+*.err.log
+
+# Local CLI state
+.gemini/
+.copilot/
+

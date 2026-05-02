@@ -1,77 +1,55 @@
 # JARVIS Chat Agent
 
-Modular LLM-powered chat agent with swappable providers.
+A Python-based chat runtime for JARVIS. It handles natural language processing, tool orchestration (ReAct), and routes all hardware/system commands to the Rust MCP server.
 
-## Features
+## Overview
 
-- **Swappable LLM Providers**: Ollama (free, local), OpenAI, Google Gemini, GitHub Copilot SDK
-- **Tool Integration**: Execute system tools via MCP Server
-- **Multi-turn Conversations**: Maintains conversation context
-- **KV-style Context Cache**: Session cache with summary compaction and token-budgeted context assembly
-- **Context DType Compatibility**: fp16/fp8 conversion pipeline for numeric context artifacts
-- **Streaming Support**: Real-time response streaming
+- **Runtime:** Python 3.12+ (managed via `uv`)
+- **Backend:** Communicates with `jarvis-skills/rust-mcp-server` via JSON-RPC.
+- **Tools:** Dynamic loading from MCP `tools/list` with smart local caching.
 
-## Installation
+## Setup
 
+1. **Install dependencies:**
+   ```bash
+   cd jarvis-chat
+   uv sync
+   ```
+
+2. **Configure environment:**
+   Create a `.env` file from the example and add your keys:
+   ```bash
+   cp .env.example .env
+   ```
+
+## Running the Agent
+
+### 1. Start the Rust MCP Server
+(From the `jarvis-skills` directory)
+```bash
+cd rust-mcp-server
+cargo run --release
+```
+
+### 2. Launch the Chat Agent
 ```bash
 cd jarvis-chat
-uv sync
+python main.py
 ```
 
-## Quick Start
+- **Interactive mode:** Just run `python main.py` and start typing.
+- **Server mode:** Run `python main.py --server --port 8000` to expose the HTTP API.
 
-```python
-from chat_agent import ChatAgent, AgentConfig, LLMConfig
+## Verification
 
-# Create with Ollama (free, local)
-config = AgentConfig(
-    llm=LLMConfig(provider="ollama", model="llama3")
-)
-agent = ChatAgent(config=config, llm_config=config.llm)
+Check if everything is connected correctly:
 
-# Process a transcript
-response = agent.process_transcript("What is the system CPU usage?")
-print(response)
-```
+1. **Health Check:** `curl http://127.0.0.1:5050/health`
+2. **Tool Discovery:** `curl http://127.0.0.1:5050/tools`
+3. **Smoke Test:** `python main.py "get system info"`
 
-## Configuration
+## Notes
 
-Set environment variables for paid providers:
-
-```bash
-export OPENAI_API_KEY=sk-...
-export GEMINI_API_KEY=...
-```
-
-Optional context cache settings:
-
-```bash
-export CHAT_SESSION_ID=default
-export CONTEXT_CACHE_ENABLED=true
-export CONTEXT_DTYPE=fp16   # fp32|fp16|fp8
-export CONTEXT_CACHE_PATH=.cache/context-cache.json
-```
-
-## Benchmarking
-
-Run fixed-prompt TTFT/TPS benchmarks against Google AI Studio API:
-
-```bash
-cd jarvis-chat
-python benchmark_google_api.py --model gemini-1.5-flash --warmup --repeats 1
-```
-
-Results are written to `../BENCHMARK_RESULTS.md`.
-
-## Providers
-
-| Provider | Type | Cost | Setup |
-|----------|------|------|-------|
-| Ollama | Local | Free | `ollama pull llama3` |
-| OpenAI | API | Paid | OPENAI_API_KEY |
-| Gemini | API | Free tier | GEMINI_API_KEY |
-| Copilot SDK | GitHub | Free with Copilot | GitHub CLI auth |
-
-## License
-
-MIT
+- **Caching:** LLM responses are cached for 3 minutes to save on API costs and latency.
+- **Routing:** Complex hardware intents (Spotify, Volume, WiFi) are routed directly to Rust for native execution.
+- **Requirements:** Ensure the Rust MCP server is running before starting the Python agent.
