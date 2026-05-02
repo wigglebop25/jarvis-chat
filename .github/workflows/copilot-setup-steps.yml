@@ -1,0 +1,46 @@
+name: "Copilot Setup Steps"
+
+# Automatically run the setup steps when they are changed to allow for easy validation, and
+# allow manual testing through the repository's "Actions" tab
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+  pull_request:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+
+jobs:
+  # The job MUST be called `copilot-setup-steps` or it will not be picked up by Copilot.
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+
+    # Set the permissions to the lowest permissions possible needed for your steps.
+    # Copilot will be given its own token for its operations.
+    permissions:
+      # Required to clone the repository and install dependencies
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install UV package manager
+        run: pip install uv
+
+      - name: Install dependencies with UV
+        run: uv sync
+
+      - name: Verify Pyright
+        run: |
+          uv run pyright --version 2>/dev/null || echo "Pyright not installed; will be installed on-demand"
+
+      - name: Verify Pylint
+        run: |
+          uv run pylint --version 2>/dev/null || echo "Pylint not installed; will be installed on-demand"

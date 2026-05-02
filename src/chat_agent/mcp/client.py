@@ -1,10 +1,7 @@
 from typing import Any, Optional
 import os
-import json
 
 import httpx
-
-from .models import MCPRequest, MCPResponse
 
 
 def _serialize_protobuf(obj: Any) -> Any:
@@ -36,7 +33,15 @@ class MCPClient:
         resolved_base_url = base_url or os.getenv("MCP_SERVER_URL", "http://127.0.0.1:5050")
         self.base_url = resolved_base_url.rstrip("/")
         self.timeout = timeout
-        self.client = httpx.AsyncClient(timeout=timeout)
+        request_timeout = httpx.Timeout(timeout, connect=min(5.0, float(timeout)))
+        self.client = httpx.AsyncClient(
+            timeout=request_timeout,
+            limits=httpx.Limits(
+                max_connections=20,
+                max_keepalive_connections=10,
+                keepalive_expiry=30.0,
+            ),
+        )
         self._request_id = 0
 
     async def call(
@@ -57,31 +62,35 @@ class MCPClient:
             Result from the RPC call
         """
         self._request_id += 1
-        request = MCPRequest(
-            id=str(self._request_id),
-            method=method,
-            params=params or {},
-        )
+        request = {
+            "jsonrpc": "2.0",
+            "id": str(self._request_id),
+            "method": method,
+            "params": params or {},
+        }
 
         try:
             response = await self.client.post(
                 f"{self.base_url}/jsonrpc",
-                json=request.model_dump(),
+                json=request,
                 timeout=timeout or self.timeout,
             )
             response.raise_for_status()
 
             data = response.json()
-            rpc_response = MCPResponse(**data)
-
-            if rpc_response.error:
+            if not isinstance(data, dict):
+                raise RuntimeError("Invalid MCP response shape")
+            error = data.get("error")
+            if error:
                 raise RuntimeError(
-                    f"RPC error ({rpc_response.error.get('code')}): "
-                    f"{rpc_response.error.get('message')}"
+                    f"RPC error ({error.get('code')}): "
+                    f"{error.get('message')}"
                 )
 
             # Serialize protobuf objects to JSON-safe format
-            result = rpc_response.result if rpc_response.result is not None else {}
+            result = data.get("result")
+            if result is None:
+                result = {}
             return _serialize_protobuf(result)
 
         except httpx.HTTPError as e:

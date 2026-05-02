@@ -5,7 +5,9 @@ from typing import Any, AsyncGenerator, Optional
 # Suppress FutureWarning from deprecated google.generativeai
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-import google.generativeai as genai
+from google.generativeai.client import configure
+from google.generativeai.generative_models import GenerativeModel
+from google.generativeai.types import GenerationConfig
 
 from .base import LLMProvider, LLMConfigurationError, LLMProviderError, LLMResponse, ToolCall
 
@@ -25,12 +27,12 @@ class GeminiProvider(LLMProvider):
             raise LLMConfigurationError("GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set")
 
         # Set API key via environment or direct parameter
-        genai.api_key = api_key
+        configure(api_key=api_key)
         self.api_key = api_key
         self.model = model
         self.temperature = temperature or 0.7
         self.max_tokens = max_tokens or 2048
-        self.client = genai.GenerativeModel(model)
+        self.client = GenerativeModel(model)
 
     @property
     def name(self) -> str:
@@ -58,17 +60,11 @@ class GeminiProvider(LLMProvider):
 
     def _convert_tools_to_gemini(self, tools: list[dict[str, Any]]) -> dict[str, Any]:
         """Convert tool definitions to Gemini format (single tools object)."""
+        from ..tools.schemas import ToolSchemaConverter
+        
         function_declarations = []
         for tool in tools:
-            function_declarations.append({
-                "name": tool.get("name", ""),
-                "description": tool.get("description", ""),
-                "parameters": tool.get("parameters", {
-                    "type": "object",
-                    "properties": {},
-                    "required": []
-                }),
-            })
+            function_declarations.append(ToolSchemaConverter.to_gemini(tool))
         
         return {
             "function_declarations": function_declarations
@@ -183,7 +179,7 @@ class GeminiProvider(LLMProvider):
         try:
             kwargs = {
                 "stream": False,
-                "generation_config": genai.types.GenerationConfig(
+                "generation_config": GenerationConfig(
                     temperature=self.temperature,
                     max_output_tokens=self.max_tokens,
                 ),
@@ -219,7 +215,7 @@ class GeminiProvider(LLMProvider):
         try:
             kwargs = {
                 "stream": False,
-                "generation_config": genai.types.GenerationConfig(
+                "generation_config": GenerationConfig(
                     temperature=self.temperature,
                     max_output_tokens=self.max_tokens,
                 ),
@@ -256,7 +252,7 @@ class GeminiProvider(LLMProvider):
             stream_response = await self.client.generate_content_async(
                 self._to_contents(messages),
                 stream=True,
-                generation_config=genai.types.GenerationConfig(
+                generation_config=GenerationConfig(
                     temperature=self.temperature,
                     max_output_tokens=self.max_tokens,
                 ),

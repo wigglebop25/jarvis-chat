@@ -36,6 +36,7 @@ class IntentType(str, Enum):
     VOLUME_CONTROL = "volume_control"
     MUSIC_CONTROL = "music_control"
     NETWORK_TOGGLE = "network_toggle"
+    DIRECTORY_LIST = "directory_list"
     FILE_ORGANIZATION = "file_organization"
     GENERAL_QUERY = "general_query"
     UNKNOWN = "unknown"

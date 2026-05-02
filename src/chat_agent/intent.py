@@ -6,6 +6,7 @@ Maps voice commands to actionable intents.
 """
 
 import re
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -13,12 +14,25 @@ from .models import Intent, IntentType
 
 
 INTENT_PATTERNS: dict[IntentType, list[str]] = {
+    IntentType.DIRECTORY_LIST: [
+        r"(show|list|see|view)\s*(the)?\s*(content|contents|folders|files)",
+        r"(what('s|s| is)\s*(inside|in))\s*(the)?\s*(drive|folder)",
+        r"(folders?|files?)\s*(inside|in)\s*(the)?\s*(drive|folder)",
+        r"(list|show)\s*(folders?|files?)\s*(in|inside)\s*[a-z]:",
+        r"(drive)\s*[a-z]\s*(content|contents|folders|files)",
+        r"(content|contents|contend)\s*(in|inside|of)\s*(the)?\s*[a-z]\b",
+    ],
     IntentType.SYSTEM_INFO: [
         r"^system\s*(info|information|status)$",
+        r"system\s*(usage|utilization)",
+        r"get\s*system\s*(info|information|status|usage)",
+        r"get_system_info",
         r"(cpu|processor)\s*(usage|load|status)?",
         r"(ram|memory)\s*(usage|status)?",
-        r"(storage|disk|drive)\s*(space|usage|status)?",
+        r"(storage|disk)\s*(space|usage|status)",
+        r"drive\s*(space|usage|status)",
         r"(network|internet)\s*(status|connection)$",
+        r"(what|which)\s*(network|wifi|wi-fi|internet).*(connect|connected|connecting|status)",
         r"how\s*(much|many)\s*(memory|ram|storage|space)",
         r"what('s|s| is)\s*(the|my)?\s*(cpu|memory|ram|storage)",
     ],
@@ -27,6 +41,7 @@ INTENT_PATTERNS: dict[IntentType, list[str]] = {
         r"(turn|set)\s*(up|down)?\s*(the)?\s*volume",
         r"(mute|unmute)(\s+(the|my|the\s+)?)?(\s+(sound|volume|audio|music))?",
         r"(increase|decrease|raise|lower)\s*(the)?\s*volume",
+        r"adjust\s*(the)?\s*volume(\s*(to|at)\s*\d+)?",
         r"volume\s*(to|at)?\s*(\d+)",
         r"(set|change)\s*(the)?\s*volume\s*(to|at)?\s*(\d+)",
         r"make\s*it\s*(louder|quieter)",
@@ -35,7 +50,7 @@ INTENT_PATTERNS: dict[IntentType, list[str]] = {
         r"(play|pause|stop)\s*(music|song|track|spotify)?",
         r"(next|previous|skip)\s*(track|song)?",
         r"(spotify|music)\s*(play|pause|next|previous|skip)",
-        r"what('s|s| is)\s*(playing|this song)",
+        r"what('s|s| is)?\s*(music|song|track)?\s*(is\s*)?playing",
         r"current\s*(track|song)",
         r"resume\s*(music|playback|spotify)?",
     ],
@@ -43,7 +58,7 @@ INTENT_PATTERNS: dict[IntentType, list[str]] = {
         r"(turn|toggle|switch)\s*(on|off)\s*(the)?\s*(wifi|wi-fi|bluetooth|ethernet)",
         r"(enable|disable)\s*(the)?\s*(wifi|wi-fi|bluetooth|ethernet)",
         r"(wifi|wi-fi|bluetooth|ethernet)\s*(on|off)",
-        r"(connect|disconnect)\s*(to)?\s*(wifi|wi-fi|bluetooth|ethernet)?",
+        r"(connect|disconnect)\s*(to)?\s*(wifi|wi-fi|bluetooth|ethernet)",
     ],
     IntentType.FILE_ORGANIZATION: [
         r"(organize|clean|sort)\s*(my|the)?\s*(downloads|desktop|documents|folder|files)",
@@ -69,7 +84,7 @@ PARAMETER_EXTRACTORS = {
             (r"\b(pause|stop)\b", "pause"),
             (r"\b(next|skip)\b", "next"),
             (r"\bprevious\b", "previous"),
-            (r"(what('s| is)\s*playing|current\s*(track|song))", "current"),
+            (r"(what('s|s| is)?\s*(music|song|track)?\s*(is\s*)?playing|current\s*(track|song))", "current"),
         ],
     },
     IntentType.NETWORK_TOGGLE: {
@@ -97,6 +112,11 @@ PARAMETER_EXTRACTORS = {
         "dry_run": [
             (r"\b(preview|dry\s*run|simulate)\b", "true"),
             (r"\b(now|apply|execute|do it)\b", "false"),
+        ],
+    },
+    IntentType.DIRECTORY_LIST: {
+        "include_hidden": [
+            (r"\b(hidden|all files)\b", "true"),
         ],
     },
 }
@@ -175,11 +195,23 @@ def extract_parameters(text: str, intent_type: IntentType) -> dict:
 
 def get_tool_name_for_intent(intent: Intent) -> Optional[str]:
     """Map an intent to its corresponding MCP tool name."""
+    if intent.type == IntentType.MUSIC_CONTROL:
+        action = intent.parameters.get("action", "")
+        if action == "pause":
+            return "pausePlayback"
+        elif action == "next":
+            return "skipToNext"
+        elif action == "previous":
+            return "skipToPrevious"
+        elif action == "current":
+            return "getNowPlaying"
+        return "playMusic"
+
     tool_mapping = {
         IntentType.SYSTEM_INFO: "get_system_info",
         IntentType.VOLUME_CONTROL: "control_volume",
-        IntentType.MUSIC_CONTROL: "control_spotify",
         IntentType.NETWORK_TOGGLE: "toggle_network",
+        IntentType.DIRECTORY_LIST: "list_directory",
         IntentType.FILE_ORGANIZATION: "organize_folder",
     }
     return tool_mapping.get(intent.type)
@@ -196,12 +228,97 @@ def map_intent_params_to_tool(intent: Intent) -> dict:
     if intent.type == IntentType.VOLUME_CONTROL:
         if "direction" in params:
             params["action"] = params.pop("direction")
+        elif "level" in params:
+            params["action"] = "set"
+        else:
+            params["action"] = "get"
+
+        if "level" in params:
+            try:
+                params["level"] = int(params["level"])
+            except (TypeError, ValueError):
+                params.pop("level", None)
     
+    elif intent.type == IntentType.MUSIC_CONTROL:
+        # Action is used for routing to the correct tool name, remove it from args
+        params.pop("action", None)
+
     elif intent.type == IntentType.NETWORK_TOGGLE:
         if "device" in params:
             params["interface"] = params.pop("device")
         if "state" in params:
             params["enable"] = params.pop("state") == "on"
+    elif intent.type == IntentType.SYSTEM_INFO:
+        text = intent.raw_text.lower()
+        include: list[str] = []
+        keyword_map = {
+            "cpu": [r"\bcpu\b", r"\bprocessor\b"],
+            "ram": [r"\bram\b", r"\bmemory\b"],
+            "storage": [r"\bstorage\b", r"\bdisk\b", r"\bdrive\b", r"\bssd\b", r"\bspace\b"],
+            "network": [r"\bnetwork\b", r"\binternet\b", r"\bwifi\b", r"\bwi-fi\b", r"\bconnected\b", r"\bconnection\b"],
+        }
+        for section, patterns in keyword_map.items():
+            if any(re.search(pattern, text) for pattern in patterns):
+                include.append(section)
+
+        if include:
+            deduped: list[str] = []
+            for section in include:
+                if section not in deduped:
+                    deduped.append(section)
+            params["include"] = deduped
+    elif intent.type == IntentType.DIRECTORY_LIST:
+        text = intent.raw_text.lower()
+
+        def _to_drive_root(letter: str, *, require_exists: bool) -> Optional[str]:
+            candidate = f"{letter.upper()}:\\"
+            if os.name != "nt":
+                return candidate
+            if not require_exists or Path(candidate).exists():
+                return candidate
+            return None
+
+        path: Optional[str] = None
+
+        # Explicit drive formats first (D:, D:\, drive D, D drive)
+        for pattern in (
+            r"\b([a-z])\s*:",
+            r"\bdrive\s*([a-z])\b",
+            r"\b([a-z])\s*drive\b",
+        ):
+            match = re.search(pattern, text)
+            if match:
+                maybe_drive = _to_drive_root(match.group(1), require_exists=False)
+                if maybe_drive:
+                    path = maybe_drive
+                    break
+
+        # Handle natural phrasing like "inside D" / "inside the C"
+        if path is None:
+            match = re.search(r"\b(?:inside|in)\s*(?:the\s*)?([a-z])\b", text)
+            if match:
+                maybe_drive = _to_drive_root(match.group(1), require_exists=True)
+                if maybe_drive:
+                    path = maybe_drive
+        if path is None:
+            match = re.search(r"\bi\s+the\s+([a-z])\b", text)
+            if match:
+                maybe_drive = _to_drive_root(match.group(1), require_exists=True)
+                if maybe_drive:
+                    path = maybe_drive
+
+        if path is None:
+            path = str(Path.home())
+        params["path"] = path
+
+        params["include_hidden"] = params.get("include_hidden", "false") == "true"
+        params["max_entries"] = 200
+        params["directories_only"] = bool(re.search(r"\bfolders?\b", text)) and not bool(
+            re.search(r"\bfiles?\b", text)
+        )
+        params["files_only"] = bool(re.search(r"\bfiles?\b", text)) and not bool(
+            re.search(r"\bfolders?\b", text)
+        )
     elif intent.type == IntentType.FILE_ORGANIZATION:
         folder_alias = params.pop("target_folder", "downloads")
         home = Path.home()

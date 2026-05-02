@@ -23,11 +23,12 @@ class CopilotProvider(LLMProvider):
         self.max_tokens = max_tokens or 2048
         
         # Find copilot CLI executable
-        self.copilot_path = shutil.which("copilot")
-        if not self.copilot_path:
+        copilot_path = shutil.which("copilot")
+        if not copilot_path:
             raise LLMConfigurationError(
                 "Copilot CLI not found. Install from: https://github.com/github/copilot-cli"
             )
+        self.copilot_path: str = copilot_path
         
         # Verify Copilot CLI is working
         try:
@@ -139,9 +140,10 @@ class CopilotProvider(LLMProvider):
             )
             
             # Stream output line by line
-            for line in process.stdout:
-                if line.strip():
-                    yield line
+            if process.stdout:
+                for line in process.stdout:
+                    if line.strip():
+                        yield line
             
             process.wait(timeout=30)
             if process.returncode != 0:

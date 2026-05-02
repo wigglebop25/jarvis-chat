@@ -1,46 +1,56 @@
 import asyncio
-from typing import Any, Optional
+from typing import Optional, Any
 
 from .client import MCPClient
 from .models import MCPToolResult
 
 
 class MCPRouter:
-    """Routes tool execution to MCP server with optional fallback behavior."""
+    """Routes tool execution to MCP server only (no local fallback)."""
 
-    def __init__(self, mcp_client: Optional[MCPClient] = None, fallback_enabled: bool = False):
+    def __init__(self, mcp_client: Optional[MCPClient] = None):
         self.mcp_client = mcp_client or MCPClient()
-        self.fallback_enabled = fallback_enabled
 
     async def execute_tool(
         self,
         name: str,
         **kwargs,
     ) -> MCPToolResult:
-        """
-        Execute a tool through MCP JSON-RPC and optionally fall back to direct execution.
-        """
-        if self.mcp_client:
-            try:
-                result = await self.mcp_client.call(
-                    method="tools/call",
-                    params={
-                        "name": name,
-                        "arguments": kwargs,
-                    },
-                )
-                return MCPToolResult(result=result)
-            except Exception as exc:
-                if not self.fallback_enabled:
-                    return MCPToolResult(error=str(exc), is_error=True)
+        """Execute a tool through MCP JSON-RPC."""
+        try:
+            result = await self.mcp_client.call(
+                method="tools/call",
+                params={
+                    "name": name,
+                    "arguments": kwargs,
+                },
+            )
+            return MCPToolResult(result=result)
+        except Exception as exc:
+            return MCPToolResult(
+                error=(
+                    f"Rust MCP tool execution failed: {exc}. "
+                    "Ensure jarvis-skills Rust MCP server is running."
+                ),
+                is_error=True,
+            )
 
-        if self.fallback_enabled:
-            return await self._execute_direct(name, kwargs)
-
-        return MCPToolResult(
-            error="No MCP server available and fallback disabled",
-            is_error=True,
-        )
+    async def route_and_call(self, text: str) -> dict[str, Any]:
+        """Route intent and optionally execute tool via MCP."""
+        try:
+            return await self.mcp_client.call(
+                method="jarvis/route_and_call",
+                params={"text": text},
+            )
+        except Exception as exc:
+            return {
+                "intent": "UNKNOWN",
+                "confidence": 0.0,
+                "tool_name": None,
+                "arguments": {},
+                "should_execute": False,
+                "execution_error": str(exc),
+            }
 
     def execute_tool_sync(
         self,
@@ -62,33 +72,39 @@ class MCPRouter:
 
     async def list_tools(self) -> list[dict[str, Any]]:
         """List tools from MCP server."""
-        if not self.mcp_client:
-            return []
         try:
             result = await self.mcp_client.call(method="tools/list", params={})
-            if isinstance(result, dict):
-                tools = result.get("tools", [])
-                return tools if isinstance(tools, list) else []
-        except Exception:
-            return []
-        return []
+            if not isinstance(result, dict):
+                raise RuntimeError("Invalid tools/list result shape")
+            tools = result.get("tools")
+            if not isinstance(tools, list):
+                raise RuntimeError("tools/list returned invalid tools payload")
+            return tools
+        except Exception as exc:
+            raise RuntimeError(
+                f"Rust MCP tool discovery failed: {exc}. "
+                "Ensure jarvis-skills Rust MCP server is running and reachable."
+            ) from exc
+
+    def list_tools_sync(self) -> list[dict[str, Any]]:
+        """Synchronous tools/list wrapper."""
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+
+        if running_loop and running_loop.is_running():
+            raise RuntimeError("Cannot execute sync tools/list while event loop is running")
+
+        try:
+            return asyncio.run(self.list_tools())
+        except RuntimeError as exc:
+            if "event loop is running" in str(exc).lower():
+                raise RuntimeError(
+                    "Cannot execute sync tools/list while event loop is running"
+                ) from exc
+            raise
 
     async def health_check(self) -> bool:
         """Check MCP server health."""
-        if not self.mcp_client:
-            return False
         return await self.mcp_client.health_check()
-
-    async def _execute_direct(
-        self,
-        name: str,
-        arguments: dict[str, Any],
-    ) -> MCPToolResult:
-        """All tools must be executed through MCP server - no embedded fallback."""
-        return MCPToolResult(
-            error=(
-                f"Tool '{name}' requires MCP server connection. "
-                "Start jarvis-skills MCP server: cd jarvis-skills && python src/jarvis_skills/server.py"
-            ),
-            is_error=True,
-        )

@@ -8,6 +8,21 @@ from typing import Any
 
 _DEFAULT_TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
+        "name": "resolve_path",
+        "description": "ALWAYS use this first when user says 'downloads', 'documents', 'desktop' or 'home'. Resolves user-friendly names to full system paths.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "enum": ["downloads", "documents", "desktop", "home", "project"],
+                    "description": "User-friendly name: downloads, documents, desktop, home, or project",
+                }
+            },
+            "required": ["name"],
+        },
+    },
+    {
         "name": "get_system_info",
         "description": (
             "Get system information including CPU usage, RAM, storage, and network status."
@@ -48,29 +63,96 @@ _DEFAULT_TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "control_spotify",
-        "description": (
-            "Control Spotify playback (play, pause, next, previous, current, search)."
-        ),
+        "name": "searchSpotify",
+        "description": "Search for tracks, albums, artists, or playlists on Spotify",
         "parameters": {
             "type": "object",
             "properties": {
-                "action": {
-                    "type": "string",
-                    "description": "Playback action to execute.",
-                    "enum": ["play", "pause", "next", "previous", "current", "search"],
-                },
-                "uri": {
-                    "type": "string",
-                    "description": "Optional Spotify URI to play.",
-                },
-                "query": {
-                    "type": "string",
-                    "description": "Search query when action is search.",
-                },
+                "query": {"type": "string"},
+                "type": {"type": "string"},
+                "limit": {"type": "integer"}
             },
-            "required": ["action"],
-        },
+            "required": ["query", "type"]
+        }
+    },
+    {
+        "name": "getNowPlaying",
+        "description": "Get information about the currently playing track on Spotify, including device and volume info",
+        "parameters": {
+            "type": "object",
+            "properties": {}
+        }
+    },
+    {
+        "name": "playMusic",
+        "description": "Start playing a track, album, artist, or playlist on Spotify",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "uri": {"type": "string"},
+                "type": {"type": "string"},
+                "id": {"type": "string"},
+                "deviceId": {"type": "string"}
+            }
+        }
+    },
+    {
+        "name": "pausePlayback",
+        "description": "Pause the currently playing track on Spotify",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "deviceId": {"type": "string"}
+            }
+        }
+    },
+    {
+        "name": "skipToNext",
+        "description": "Skip to the next track in the current playback queue",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "deviceId": {"type": "string"}
+            }
+        }
+    },
+    {
+        "name": "skipToPrevious",
+        "description": "Skip to the previous track in the current playback queue",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "deviceId": {"type": "string"}
+            }
+        }
+    },
+    {
+        "name": "setVolume",
+        "description": "Set the playback volume to a specific percentage (requires Spotify Premium)",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "volumePercent": {"type": "integer"},
+                "deviceId": {"type": "string"}
+            },
+            "required": ["volumePercent"]
+        }
+    },
+    {
+        "name": "getAvailableDevices",
+        "description": "Get information about the user's available Spotify Connect devices",
+        "parameters": {
+            "type": "object",
+            "properties": {}
+        }
+    },
+    {
+        "name": "checkSpotifyAuth",
+        "description": "Check if the user is authenticated with Spotify. Returns a login URL if not.",
+        "parameters": {
+            "type": "object",
+            "properties": {}
+        }
     },
     {
         "name": "toggle_network",
@@ -93,13 +175,13 @@ _DEFAULT_TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "list_directory",
-        "description": "List files and folders in a directory path.",
+        "description": "List files and folders in a directory. Use EXACTLY these paths based on user intent: When user says 'downloads' use 'C:\\Users\\Administrator\\Downloads', when they say 'documents' use 'C:\\Users\\Administrator\\Documents', when they say 'desktop' use 'C:\\Users\\Administrator\\Desktop'. Always use the complete path, not just the parent folder.",
         "parameters": {
             "type": "object",
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Directory path to inspect.",
+                    "description": "FULL directory path. CRITICAL: Use 'C:\\Users\\Administrator\\Downloads' for downloads, 'C:\\Users\\Administrator\\Documents' for documents, 'C:\\Users\\Administrator\\Desktop' for desktop. Never use just 'C:\\Users\\Administrator'",
                 },
                 "include_hidden": {
                     "type": "boolean",

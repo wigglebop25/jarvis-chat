@@ -169,8 +169,10 @@ class OpenAIProvider(LLMProvider):
                 ]
 
             async with self.async_client.chat.completions.stream(**kwargs) as stream:
-                async for text in stream.text_stream:
-                    if text:
-                        yield text
+                async for chunk in stream:
+                    if hasattr(chunk, 'choices') and chunk.choices:  # type: ignore
+                        delta = chunk.choices[0].delta  # type: ignore
+                        if hasattr(delta, 'content') and delta.content:
+                            yield delta.content
         except Exception as e:
             raise LLMProviderError(f"OpenAI streaming failed: {e}") from e

@@ -64,26 +64,119 @@ AVAILABLE_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "control_spotify",
-            "description": "Control Spotify playback (play, pause, next, previous, current, search).",
+            "name": "searchSpotify",
+            "description": "Search for tracks, albums, artists, or playlists on Spotify",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "action": {
-                        "type": "string",
-                        "enum": ["play", "pause", "next", "previous", "current", "search"],
-                        "description": "The playback action to perform."
-                    },
-                    "uri": {
-                        "type": "string",
-                        "description": "Optional Spotify URI to play (track, album, or playlist)."
-                    },
-                    "query": {
-                        "type": "string",
-                        "description": "Search query when action is 'search'."
-                    }
+                    "query": {"type": "string"},
+                    "type": {"type": "string"},
+                    "limit": {"type": "integer"}
                 },
-                "required": ["action"]
+                "required": ["query", "type"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "getNowPlaying",
+            "description": "Get information about the currently playing track on Spotify, including device and volume info",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "playMusic",
+            "description": "Start playing a track, album, artist, or playlist on Spotify",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "uri": {"type": "string"},
+                    "type": {"type": "string"},
+                    "id": {"type": "string"},
+                    "deviceId": {"type": "string"}
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "pausePlayback",
+            "description": "Pause the currently playing track on Spotify",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "deviceId": {"type": "string"}
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "skipToNext",
+            "description": "Skip to the next track in the current playback queue",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "deviceId": {"type": "string"}
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "skipToPrevious",
+            "description": "Skip to the previous track in the current playback queue",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "deviceId": {"type": "string"}
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "setVolume",
+            "description": "Set the playback volume to a specific percentage (requires Spotify Premium)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "volumePercent": {"type": "integer"},
+                    "deviceId": {"type": "string"}
+                },
+                "required": ["volumePercent"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "getAvailableDevices",
+            "description": "Get information about the user's available Spotify Connect devices",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "checkSpotifyAuth",
+            "description": "Check if the user is authenticated with Spotify. Returns a login URL if not.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
             }
         }
     },
@@ -106,6 +199,41 @@ AVAILABLE_TOOLS: list[dict[str, Any]] = [
                     }
                 },
                 "required": ["interface", "enable"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_directory",
+            "description": "List files and folders in a directory path.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Directory path to inspect."
+                    },
+                    "include_hidden": {
+                        "type": "boolean",
+                        "description": "Include hidden files and folders."
+                    },
+                    "max_entries": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 2000,
+                        "description": "Maximum number of entries to return."
+                    },
+                    "directories_only": {
+                        "type": "boolean",
+                        "description": "Return directories only."
+                    },
+                    "files_only": {
+                        "type": "boolean",
+                        "description": "Return files only."
+                    }
+                },
+                "required": ["path"]
             }
         }
     },
@@ -191,6 +319,20 @@ def format_tool_result_for_display(tool_name: str, result: Any) -> str:
         if "action" in result:
             return f"Spotify: {result['action']}"
         return str(result)
+
+    if tool_name == "list_directory" and isinstance(result, dict):
+        entries = result.get("entries", [])
+        if not entries:
+            return f"No visible entries found in {result.get('path', 'the requested path')}."
+        lines = [f"Directory entries in {result.get('path', '')}:"]
+        for entry in entries[:20]:
+            if isinstance(entry, dict):
+                kind = entry.get("type", "file")
+                marker = "[DIR]" if kind == "directory" else "[FILE]"
+                lines.append(f"  {marker} {entry.get('name', '')}")
+        if result.get("truncated"):
+            lines.append("  ... (truncated)")
+        return "\n".join(lines)
 
     if tool_name == "organize_folder" and isinstance(result, dict):
         if "error" in result:

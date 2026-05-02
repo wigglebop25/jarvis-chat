@@ -7,7 +7,7 @@ Loads settings from environment variables and .env files.
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, field_validator
@@ -16,6 +16,23 @@ from .context_dtype import SUPPORTED_CONTEXT_DTYPES
 
 
 load_dotenv()
+
+
+def _get_bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() == "true"
+
+
+def _get_int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
 
 
 class LLMConfig(BaseModel):
@@ -41,9 +58,9 @@ class LLMConfig(BaseModel):
         description="Maximum tokens in response"
     )
     
-    def get_provider_kwargs(self) -> dict:
+    def get_provider_kwargs(self) -> dict[str, Any]:
         """Get provider-specific kwargs for create_provider()."""
-        kwargs = {"model": self.model}
+        kwargs: dict[str, Any] = {"model": self.model}
         
         # Only add provider-specific params
         if self.provider in ["openai", "gemini"]:
@@ -76,8 +93,8 @@ class OpenAIConfig(BaseModel):
 class MCPConfig(BaseModel):
     """MCP Server connection configuration."""
     
-    host: str = Field(default="localhost")
-    port: int = Field(default=5050)
+    host: str = Field(default_factory=lambda: os.getenv("MCP_HOST", "localhost"))
+    port: int = Field(default_factory=lambda: _get_int_env("MCP_PORT", 5050))
     timeout: float = Field(default=30.0)
     retry_attempts: int = Field(default=3)
     retry_delay: float = Field(default=1.0)
@@ -97,18 +114,39 @@ class AgentConfig(BaseModel):
     system_prompt: str = Field(
         default="""You are JARVIS, an intelligent AI assistant for desktop automation.
 
-You help users control their computer through voice commands. You can:
-- Get system information (CPU, RAM, storage, network)
-- Control system volume (up, down, mute, set level)
-- Control music playback (Spotify play/pause, skip, etc.)
-- Toggle WiFi and Bluetooth
-- Provide helpful information and answers
+CRITICAL INSTRUCTIONS:
+- ONLY respond with user-facing messages. NEVER output any internal reasoning, analysis, or thinking.
+- When using tools, do NOT explain what you're doing or say "I will call...". Just silently call the tool and present the result.
+- ONLY output the FINAL response to the user.
+- Be concise, clear, and natural.
 
-When the user asks you to do something, determine the appropriate action and respond naturally.
-If a task requires a tool, call the tool directly instead of describing which tool to use.
-Never output internal reasoning or tool-selection analysis to the user.
+You can help with:
+- System information (CPU, RAM, storage, network status)
+- Volume control (up, down, mute, set level)
+- Spotify playback control (play, pause, skip, search for music)
+- Spotify authentication (login status, login URL generation)
+- WiFi and Bluetooth management
+- File operations and organization
 
-Be concise, helpful, and friendly. Acknowledge commands and confirm actions."""
+CRITICAL PATH RESOLUTION:
+ALWAYS do this FIRST when user mentions any folder:
+1. Call "resolve_path" with the folder name (downloads, documents, desktop, home, or project)
+2. Use the resolved_path returned by that tool for any file operations
+3. NEVER guess or construct paths manually
+Examples:
+- User says "list files in downloads" → Call resolve_path("downloads") → Use result in list_directory
+- User says "organize my desktop" → Call resolve_path("desktop") → Use result in organize_folder
+
+SPOTIFY LOGIN HANDLING:
+When a user asks to log in or check Spotify status:
+1. Call "checkSpotifyAuth"
+2. If not authenticated, the tool returns a login_url - present it clearly with browser instructions
+3. If authenticated, confirm their account status
+
+RESPONSE FORMAT:
+- Respond directly with what the user needs to know
+- No meta-commentary or step-by-step explanations
+- Example: User says "Check Spotify" → You respond with login URL or current status, nothing else"""
     )
     
     debug: bool = Field(default=False)
@@ -124,6 +162,29 @@ Be concise, helpful, and friendly. Acknowledge commands and confirm actions."""
     context_cache_path: str = Field(default_factory=lambda: os.getenv("CONTEXT_CACHE_PATH", ""))
     tool_retry_attempts: int = Field(default=2, ge=0)
     tool_retry_backoff_seconds: float = Field(default=0.5, ge=0.0)
+    llm_response_cache_enabled: bool = Field(
+        default_factory=lambda: _get_bool_env("LLM_RESPONSE_CACHE_ENABLED", True)
+    )
+    llm_response_cache_ttl_seconds: int = Field(
+        default_factory=lambda: _get_int_env("LLM_RESPONSE_CACHE_TTL_SECONDS", 180),
+        ge=1,
+        le=3600,
+    )
+    llm_response_cache_max_entries: int = Field(
+        default_factory=lambda: _get_int_env("LLM_RESPONSE_CACHE_MAX_ENTRIES", 256),
+        ge=16,
+        le=5000,
+    )
+    llm_response_cache_min_chars: int = Field(
+        default_factory=lambda: _get_int_env("LLM_RESPONSE_CACHE_MIN_CHARS", 24),
+        ge=1,
+    )
+    llm_response_cache_path: str = Field(
+        default_factory=lambda: os.getenv("LLM_RESPONSE_CACHE_PATH", "")
+    )
+    llm_response_cache_allow_tool_providers: bool = Field(
+        default_factory=lambda: _get_bool_env("LLM_RESPONSE_CACHE_ALLOW_TOOL_PROVIDERS", False)
+    )
 
     @field_validator("context_dtype")
     @classmethod
