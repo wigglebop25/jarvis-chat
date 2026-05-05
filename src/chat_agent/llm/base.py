@@ -49,6 +49,15 @@ class LLMProvider(ABC):
         ...
 
     @abstractmethod
+    def count_tokens(self, text: str) -> int:
+        """Count the number of tokens in the given text."""
+        ...
+
+    def get_available_models(self) -> list[str]:
+        """Fetch available models from the provider's API."""
+        return [getattr(self, "model", "")]
+
+    @abstractmethod
     def complete_sync(
         self,
         messages: list[dict[str, str]],

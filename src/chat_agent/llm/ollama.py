@@ -35,12 +35,26 @@ class OllamaProvider(LLMProvider):
         tools: Optional[list[dict[str, Any]]] = None,
     ) -> LLMResponse:
         """Generate synchronous completion using Ollama."""
+        from .base import ToolCall
         try:
             payload = {
                 "model": self.model,
                 "messages": messages,
                 "stream": False,
             }
+            
+            if tools:
+                payload["tools"] = [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": tool.get("name"),
+                            "description": tool.get("description", ""),
+                            "parameters": tool.get("parameters", {}),
+                        }
+                    }
+                    for tool in tools
+                ]
 
             response = self.client.post(
                 f"{self.base_url}/api/chat",
@@ -49,8 +63,22 @@ class OllamaProvider(LLMProvider):
             response.raise_for_status()
 
             data = response.json()
+            message_data = data.get("message", {})
+            
+            tool_calls = []
+            if "tool_calls" in message_data:
+                for i, tc in enumerate(message_data["tool_calls"]):
+                    tool_calls.append(
+                        ToolCall(
+                            id=f"call_{i}",
+                            name=tc["function"]["name"],
+                            arguments=tc["function"]["arguments"]
+                        )
+                    )
+
             return LLMResponse(
-                text=data.get("message", {}).get("content", ""),
+                text=message_data.get("content", ""),
+                tool_calls=tool_calls,
                 model=self.model,
                 usage={
                     "prompt_tokens": data.get("prompt_eval_count", 0),

@@ -11,6 +11,9 @@ from google.generativeai.types import GenerationConfig
 
 from .base import LLMProvider, LLMConfigurationError, LLMProviderError, LLMResponse, ToolCall
 
+import logging
+logger = logging.getLogger(__name__)
+
 
 class GeminiProvider(LLMProvider):
     """Google Gemini / AI Studio API provider."""
@@ -45,17 +48,50 @@ class GeminiProvider(LLMProvider):
     def is_configured(self) -> bool:
         return bool(self.api_key)
 
+    def get_available_models(self) -> list[str]:
+        try:
+            # Use the properly exported list_models from the models module
+            from google.generativeai.models import list_models
+            models = list_models()
+            available = []
+            for m in models:
+                if "generateContent" in getattr(m, "supported_generation_methods", []):
+                    name = m.name.replace("models/", "")
+                    available.append(name)
+            return available if available else [self.model]
+        except Exception:
+            return [self.model]
+
+    def count_tokens(self, text: str) -> int:
+        if not text:
+            return 0
+        try:
+            # GenerativeModel.count_tokens can take a string
+            return self.client.count_tokens(text).total_tokens
+        except Exception:
+            return len(text) // 4
+
     def _to_contents(self, messages: list[dict[str, str]]) -> list[dict[str, Any]]:
         contents: list[dict[str, Any]] = []
         for msg in messages:
             role = msg.get("role", "user")
+            # Map system to user for Gemini if not using system_instruction
             mapped_role = "user" if role in {"user", "system"} else "model"
-            contents.append(
-                {
-                    "role": mapped_role,
-                    "parts": [{"text": msg.get("content", "")}],
-                }
-            )
+            
+            content_text = msg.get("content", "")
+            if not content_text and role != "tool":
+                continue
+
+            # Merge consecutive messages with the same role
+            if contents and contents[-1]["role"] == mapped_role:
+                contents[-1]["parts"][0]["text"] += "\n\n" + content_text
+            else:
+                contents.append(
+                    {
+                        "role": mapped_role,
+                        "parts": [{"text": content_text}],
+                    }
+                )
         return contents
 
     def _convert_tools_to_gemini(self, tools: list[dict[str, Any]]) -> dict[str, Any]:
@@ -185,17 +221,43 @@ class GeminiProvider(LLMProvider):
                 ),
             }
             
-            # Add tools if provided
+            gemini_tools = None
             if tools and self.supports_tools:
                 gemini_tools = self._convert_tools_to_gemini(tools)
                 kwargs["tools"] = gemini_tools
             
-            response = self.client.generate_content(
-                self._to_contents(messages),
-                **kwargs,
-            )
+            contents = self._to_contents(messages)
+            client = self.client
+            cache = None
             
-            # Extract tool calls if any
+            # Context Caching for large prompts
+            total_chars = sum(len(m.get("content", "")) for m in messages)
+            if total_chars > 80000 and len(contents) > 1:  # Rough heuristic before counting
+                total_tokens = sum(self.count_tokens(m.get("content", "")) for m in messages)
+                if total_tokens >= 32768:
+                    try:
+                        from google.generativeai import caching
+                        import datetime
+                        cache = caching.CachedContent.create(
+                            model=self.model,
+                            contents=contents[:-1],
+                            tools=gemini_tools,
+                            ttl=datetime.timedelta(minutes=5),
+                        )
+                        client = GenerativeModel.from_cached_content(cached_content=cache)
+                        contents = [contents[-1]]
+                    except Exception as e:
+                        pass # Fallback to normal execution
+
+            try:
+                response = client.generate_content(contents, **kwargs)
+            finally:
+                if cache:
+                    try:
+                        cache.delete()
+                    except Exception:
+                        pass
+
             tool_calls = self._extract_tool_calls(response) if tools else []
             
             return LLMResponse(
@@ -205,6 +267,8 @@ class GeminiProvider(LLMProvider):
                 usage=self._usage_from_response(response),
             )
         except Exception as e:
+            import traceback
+            logger.error(f"Gemini API Error: {e}\n{traceback.format_exc()}")
             raise LLMProviderError(f"Gemini request failed: {e}") from e
 
     async def complete(
@@ -221,17 +285,43 @@ class GeminiProvider(LLMProvider):
                 ),
             }
             
-            # Add tools if provided
+            gemini_tools = None
             if tools and self.supports_tools:
                 gemini_tools = self._convert_tools_to_gemini(tools)
                 kwargs["tools"] = gemini_tools
             
-            response = await self.client.generate_content_async(
-                self._to_contents(messages),
-                **kwargs,
-            )
+            contents = self._to_contents(messages)
+            client = self.client
+            cache = None
             
-            # Extract tool calls if any
+            # Context Caching for large prompts
+            total_chars = sum(len(m.get("content", "")) for m in messages)
+            if total_chars > 80000 and len(contents) > 1:
+                total_tokens = sum(self.count_tokens(m.get("content", "")) for m in messages)
+                if total_tokens >= 32768:
+                    try:
+                        from google.generativeai import caching
+                        import datetime
+                        cache = caching.CachedContent.create(
+                            model=self.model,
+                            contents=contents[:-1],
+                            tools=gemini_tools,
+                            ttl=datetime.timedelta(minutes=5),
+                        )
+                        client = GenerativeModel.from_cached_content(cached_content=cache)
+                        contents = [contents[-1]]
+                    except Exception as e:
+                        pass
+
+            try:
+                response = await client.generate_content_async(contents, **kwargs)
+            finally:
+                if cache:
+                    try:
+                        cache.delete()
+                    except Exception:
+                        pass
+            
             tool_calls = self._extract_tool_calls(response) if tools else []
             
             return LLMResponse(
@@ -241,6 +331,8 @@ class GeminiProvider(LLMProvider):
                 usage=self._usage_from_response(response),
             )
         except Exception as e:
+            import traceback
+            logger.error(f"Gemini API Error: {e}\n{traceback.format_exc()}")
             raise LLMProviderError(f"Gemini request failed: {e}") from e
 
     async def stream(

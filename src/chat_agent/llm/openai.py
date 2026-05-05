@@ -33,6 +33,23 @@ class OpenAIProvider(LLMProvider):
     def is_configured(self) -> bool:
         return bool(self.api_key)
 
+    def get_available_models(self) -> list[str]:
+        try:
+            models = self.client.models.list()
+            # Filter for chat models: typically gpt, o1, o3
+            chat_models = [m.id for m in models.data if "gpt" in m.id or "o1" in m.id or "o3" in m.id]
+            return sorted(chat_models) if chat_models else [self.model]
+        except Exception:
+            return [self.model]
+
+    def count_tokens(self, text: str) -> int:
+        import tiktoken
+        try:
+            encoding = tiktoken.encoding_for_model(self.model)
+        except KeyError:
+            encoding = tiktoken.get_encoding("cl100k_base")
+        return len(encoding.encode(text))
+
     def complete_sync(
         self,
         messages: list[dict[str, str]],
