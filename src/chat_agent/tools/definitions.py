@@ -63,6 +63,30 @@ _DEFAULT_TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "checkSpotifyAuth",
+        "description": "Check if the user is authenticated with Spotify. Returns a login URL if not.",
+        "parameters": {
+            "type": "object",
+            "properties": {}
+        }
+    },
+    {
+        "name": "authorizeSpotify",
+        "description": "Initiate the Spotify authorization flow by opening a browser.",
+        "parameters": {
+            "type": "object",
+            "properties": {}
+        }
+    },
+    {
+        "name": "logoutSpotify",
+        "description": "Logs the user out of Spotify by clearing the authentication cache.",
+        "parameters": {
+            "type": "object",
+            "properties": {}
+        }
+    },
+    {
         "name": "searchSpotify",
         "description": "Search for tracks, albums, artists, or playlists on Spotify",
         "parameters": {
@@ -141,14 +165,6 @@ _DEFAULT_TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "getAvailableDevices",
         "description": "Get information about the user's available Spotify Connect devices",
-        "parameters": {
-            "type": "object",
-            "properties": {}
-        }
-    },
-    {
-        "name": "checkSpotifyAuth",
-        "description": "Check if the user is authenticated with Spotify. Returns a login URL if not.",
         "parameters": {
             "type": "object",
             "properties": {}

@@ -56,7 +56,12 @@ def format_tool_result(tool_name: str, result: Any) -> str:
             return "Muted." if result["muted"] else "Unmuted."
         return "Volume command completed."
 
-    if tool_name == "control_spotify" and isinstance(result, dict):
+    spotify_tools = [
+        "control_spotify", "getNowPlaying", "checkSpotifyAuth", "searchSpotify", 
+        "playMusic", "pausePlayback", "skipToNext", "skipToPrevious", 
+        "setVolume", "getAvailableDevices"
+    ]
+    if tool_name in spotify_tools and isinstance(result, dict):
         # Handle check_auth responses with login URL (from Rust MCP server)
         if "login_url" in result and not result.get("authenticated"):
             return (
@@ -73,6 +78,11 @@ def format_tool_result(tool_name: str, result: Any) -> str:
                 return f"You are logged into Spotify as: {user_name}"
             return "You are logged into Spotify."
         
+        # Handle current playing track
+        if "track" in result:
+            track = result["track"]
+            return f"Now playing: {track.get('name', 'Unknown')} by {track.get('artist', 'Unknown')}."
+            
         # Handle other Spotify action responses
         action = result.get("action", "")
         if action:
