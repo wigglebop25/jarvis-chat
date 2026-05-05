@@ -1,6 +1,6 @@
 {
   "include": ["src", "tests", "main.py"],
-  "exclude": ["**/__pycache__", "**/.*"],
+  "exclude": ["**/__pycache__", "**/.*", "**/node_modules", ".venv"],
   "pythonVersion": "3.13",
   "typeCheckingMode": "basic",
   "pythonPath": ".venv/bin/python",
