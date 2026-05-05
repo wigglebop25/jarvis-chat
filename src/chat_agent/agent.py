@@ -32,12 +32,19 @@ class ChatAgent(LLMHandlerMixin, ToolHandlerMixin, CacheHandlerMixin):
 
     Processes voice transcripts using modular LLM providers
     and routes tool calls through MCP Server.
+    Can operate in legacy mode (imperative) or langgraph mode (graph-based).
     """
 
     def __init__(self, config: Optional[AgentConfig] = None, llm_config: Optional[LLMConfig] = None):
         self.config = config or AgentConfig()
         self.llm_config = llm_config or self.config.llm
         self.session_id = self.config.session_id
+        
+        if self.config.agent_type == "langgraph":
+            from .langgraph_agent import LangGraphChatAgent
+            self._delegate = LangGraphChatAgent(self.config, llm_config)
+            return
+
         self.context = ConversationContext()
 
         self.llm_provider = None
@@ -55,10 +62,10 @@ class ChatAgent(LLMHandlerMixin, ToolHandlerMixin, CacheHandlerMixin):
         )
 
         self.context_cache = None
-        if self.config.context_cache_enabled:
+        if self.config.context_cache_enabled and self.llm_provider:
             path = Path(self.config.context_cache_path).expanduser() if self.config.context_cache_path else None
             self.context_cache = SessionContextCache(
-                provider=self.llm_config.provider, model=self.llm_config.model,
+                llm_provider=self.llm_provider,
                 requested_dtype=self.config.context_dtype, max_turns=self.config.context_cache_max_turns,
                 summary_keep_last=self.config.context_cache_summary_keep_last,
                 token_budget=self.config.context_token_budget, persistence_path=path,
@@ -94,6 +101,9 @@ class ChatAgent(LLMHandlerMixin, ToolHandlerMixin, CacheHandlerMixin):
         return None
 
     async def process_transcript(self, transcript: str) -> str:
+        if hasattr(self, "_delegate"):
+            return await self._delegate.process_transcript(transcript)
+
         if not transcript or not transcript.strip():
             return "I didn't catch that. Could you please repeat?"
 
@@ -148,25 +158,55 @@ class ChatAgent(LLMHandlerMixin, ToolHandlerMixin, CacheHandlerMixin):
         return response
 
     def clear_context(self) -> None:
+        if hasattr(self, "_delegate"):
+            return self._delegate.clear_context()
         self.context.clear(keep_system=True)
         if self.context_cache: self.context_cache.clear_session(self.session_id)
         if self.response_cache: self.response_cache.invalidate_session(self.session_id)
 
+    def change_model(self, model_name: str, provider_name: Optional[str] = None) -> None:
+        """Dynamically change the LLM model and optionally the provider."""
+        if hasattr(self, "_delegate"):
+            return self._delegate.change_model(model_name, provider_name)
+        if provider_name:
+            self.llm_config.provider = provider_name
+        self.llm_config.model = model_name
+
+        new_provider = create_provider(self.llm_config.provider, **self.llm_config.get_provider_kwargs())
+        
+        if not new_provider.is_configured():
+            raise ValueError(f"Provider {self.llm_config.provider} is not properly configured (check API keys).")
+            
+        self.llm_provider = new_provider
+        
+        if self.context_cache:
+            self.context_cache.update_provider(self.llm_provider)
+
     def set_session_id(self, session_id: str) -> None:
+        if hasattr(self, "_delegate"):
+            return self._delegate.set_session_id(session_id)
         self.session_id = session_id.strip() if session_id else "default"
 
     def get_conversation_history(self) -> list:
+        if hasattr(self, "_delegate"):
+            return self._delegate.get_conversation_history()
         return self.context.messages.copy()
 
     def get_cache_stats(self) -> dict[str, Any]:
+        if hasattr(self, "_delegate"):
+            return self._delegate.get_cache_stats()
         stats: dict[str, Any] = self.context_cache.get_stats(self.session_id) if self.context_cache else {"enabled": False}
         stats["response_cache"] = self.response_cache.get_stats() if self.response_cache else {"enabled": False}
         return stats
 
     def register_context_artifact(self, name: str, values: list[float], source_dtype: str = "fp32") -> dict:
+        if hasattr(self, "_delegate"):
+            return self._delegate.register_context_artifact(name, values, source_dtype)
         if not self.context_cache: raise RuntimeError("Context cache disabled.")
         return self.context_cache.register_artifact(self.session_id, name, values, source_dtype).to_dict()
 
     def convert_context_artifact_dtype(self, name: str, target_dtype: str) -> dict:
+        if hasattr(self, "_delegate"):
+            return self._delegate.convert_context_artifact_dtype(name, target_dtype)
         if not self.context_cache: raise RuntimeError("Context cache disabled.")
         return self.context_cache.convert_artifact_dtype(self.session_id, name, target_dtype).to_dict()

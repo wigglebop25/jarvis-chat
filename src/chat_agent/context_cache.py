@@ -17,17 +17,7 @@ from .context_dtype import (
     resolve_target_dtype,
     validate_context_dtype,
 )
-
-
-def estimate_text_tokens(text: str) -> int:
-    """
-    Lightweight token estimate used for context budgeting.
-
-    This is intentionally simple and deterministic for consistent comparisons.
-    """
-    if not text.strip():
-        return 0
-    return max(1, int(len(text) / 4))
+from .llm.base import LLMProvider
 
 
 @dataclass(slots=True)
@@ -70,23 +60,23 @@ class SessionContextCache:
     def __init__(
         self,
         *,
-        provider: str,
-        model: str,
+        llm_provider: LLMProvider,
         requested_dtype: str = "fp16",
         max_turns: int = 20,
         summary_keep_last: int = 8,
         token_budget: int = 3000,
         persistence_path: Path | None = None,
     ) -> None:
-        self.provider = provider
-        self.model = model
+        self.llm_provider = llm_provider
+        self.provider = llm_provider.name
+        self.model = getattr(llm_provider, "model", "")
         self.max_turns = max_turns
         self.summary_keep_last = summary_keep_last
         self.token_budget = token_budget
         self.persistence_path = persistence_path
         self._sessions: dict[str, SessionState] = {}
 
-        compatible = compatible_dtypes_for_model(provider=provider, model=model)
+        compatible = compatible_dtypes_for_model(provider=self.provider, model=self.model)
         self.compatible_dtypes = sorted(compatible)
         self.requested_dtype = validate_context_dtype(requested_dtype)
         self.default_dtype = resolve_target_dtype(self.requested_dtype, compatible)
@@ -97,6 +87,22 @@ class SessionContextCache:
 
     def _now(self) -> str:
         return datetime.now(timezone.utc).isoformat()
+
+    def update_provider(self, llm_provider: LLMProvider) -> None:
+        """Update the LLM provider and recalculate compatible dtypes for active sessions."""
+        self.llm_provider = llm_provider
+        self.provider = llm_provider.name
+        self.model = getattr(llm_provider, "model", "")
+        
+        compatible = compatible_dtypes_for_model(provider=self.provider, model=self.model)
+        self.compatible_dtypes = sorted(compatible)
+        self.default_dtype = resolve_target_dtype(self.requested_dtype, compatible)
+
+        for state in self._sessions.values():
+            state.compatible_dtypes = self.compatible_dtypes
+            if state.active_dtype not in self.compatible_dtypes:
+                state.active_dtype = self.default_dtype
+        self._persist()
 
     def _summarize_messages(self, messages: list[CachedMessage]) -> str:
         lines: list[str] = []
@@ -140,7 +146,7 @@ class SessionContextCache:
             CachedMessage(
                 role=role,
                 content=content,
-                estimated_tokens=estimate_text_tokens(content),
+                estimated_tokens=self.llm_provider.count_tokens(content),
                 created_at_utc=self._now(),
             )
         )
@@ -151,21 +157,28 @@ class SessionContextCache:
     def build_messages(self, session_id: str, system_prompt: str) -> list[dict[str, str]]:
         state = self._get_or_create(session_id)
         messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
-        used_tokens = estimate_text_tokens(system_prompt)
+        used_tokens = self.llm_provider.count_tokens(system_prompt)
 
-        if state.summary:
-            summary_message = f"Conversation summary:\n{state.summary}"
-            summary_tokens = estimate_text_tokens(summary_message)
-            if used_tokens + summary_tokens <= self.token_budget:
-                messages.append({"role": "system", "content": summary_message})
-                used_tokens += summary_tokens
-
+        # To optimize OpenAI cache prefix, we select the recent messages first
         total_message_tokens = sum(m.estimated_tokens for m in state.messages)
         selected: list[CachedMessage] = []
         selected_tokens = 0
+        
+        # Calculate how many tokens the summary would use if present
+        summary_message = ""
+        summary_tokens = 0
+        if state.summary:
+            summary_message = f"Conversation summary:\n{state.summary}"
+            summary_tokens = self.llm_provider.count_tokens(summary_message)
 
+        # Ensure we have budget for the summary first
+        available_budget = self.token_budget - used_tokens
+        if summary_tokens > 0 and available_budget >= summary_tokens:
+            available_budget -= summary_tokens
+
+        # Select recent messages that fit
         for msg in reversed(state.messages):
-            if used_tokens + selected_tokens + msg.estimated_tokens > self.token_budget:
+            if selected_tokens + msg.estimated_tokens > available_budget:
                 continue
             selected.append(msg)
             selected_tokens += msg.estimated_tokens
@@ -175,6 +188,10 @@ class SessionContextCache:
         if dropped_tokens > 0:
             state.cache_hit_count += 1
             state.estimated_prompt_token_savings += dropped_tokens
+
+        # Append summary immediately before recent messages, after stable system prompt prefix
+        if summary_tokens > 0 and (used_tokens + summary_tokens) <= self.token_budget:
+            messages.append({"role": "system", "content": summary_message})
 
         for msg in selected:
             messages.append({"role": msg.role, "content": msg.content})

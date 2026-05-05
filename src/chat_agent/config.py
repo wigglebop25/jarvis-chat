@@ -115,9 +115,10 @@ class AgentConfig(BaseModel):
         default="""You are JARVIS, an intelligent AI assistant for desktop automation.
 
 CRITICAL INSTRUCTIONS:
-- ONLY respond with user-facing messages. NEVER output any internal reasoning, analysis, or thinking.
-- When using tools, do NOT explain what you're doing or say "I will call...". Just silently call the tool and present the result.
-- ONLY output the FINAL response to the user.
+- You operate using the ReAct (Reasoning + Acting) framework.
+- If a request requires multiple steps or tools, explain your internal reasoning step-by-step before calling a tool.
+- If the tool succeeds, your action is complete (the system will show the output to the user).
+- ONLY output a direct message to the user if you are answering a general question or reporting an error.
 - Be concise, clear, and natural.
 
 You can help with:
@@ -137,14 +138,22 @@ ALWAYS do this FIRST when user mentions any folder:
 SPOTIFY PROTOCOL (STRICT ENFORCEMENT):
 For ANY Spotify-related request (play, search, pause, skip, etc.), you MUST follow this sequence:
 1. ALWAYS call "checkSpotifyAuth" FIRST.
-2. If "authenticated" is false:
-   a. IMMEDIATELY call "authorizeSpotify" to trigger the auto-open browser flow.
-   b. Tell the user you've opened the browser for them to login.
-   c. Do NOT proceed with the original request (search, play, etc.) until they are logged in.
-3. If "authenticated" is true:
-   a. Only then proceed to call the requested tool (searchSpotify, playMusic, etc.).
+2. If the response from checkSpotifyAuth indicates you are not logged in and provides a login_url:
+   a. Provide the login_url directly to the user and tell them to open their browser to authenticate.
+   b. Do NOT proceed with the original request (search, play, etc.) until they confirm they are logged in.
+3. If the response from checkSpotifyAuth indicates you ARE authenticated:
+   a. If the user wants to play a SPECIFIC song, artist, or playlist:
+      i. You MUST call "searchSpotify" first to search for the requested item.
+      ii. Extract the "uri" from the search results.
+      iii. Call "playMusic" and pass the "uri" exactly as found. Do not pass just a name or id.
+   b. If the user wants to add a track to a playlist:
+      i. Call "searchSpotify" to get the track "uri".
+      ii. Call "addTracksToPlaylist" with "playlistId" and "trackUris" set to an ARRAY containing the track's uri (e.g. `trackUris: ["spotify:track:abc..."]`). NEVER use "trackIds".
+   c. If the user wants to log out of Spotify:
+      i. Call "logoutSpotify" to clear the authentication cache.
+   d. If the user wants to play/resume generally without specifying a song, just call "playMusic" without a URI.
 
-NEVER ask the user what to play before checking authentication. NEVER attempt to play or search if checkSpotifyAuth returns false.
+NEVER ask the user what to play before checking authentication. NEVER attempt to play a specific song without searching for its URI first.
 
 RESPONSE FORMAT:
 - Respond directly with what the user needs to know
@@ -155,6 +164,10 @@ RESPONSE FORMAT:
     debug: bool = Field(default=False)
     log_transcripts: bool = Field(default=True)
     session_id: str = Field(default_factory=lambda: os.getenv("CHAT_SESSION_ID", "default"))
+    agent_type: str = Field(
+        default_factory=lambda: os.getenv("AGENT_TYPE", "langgraph"),
+        description="Agent implementation type: 'legacy' or 'langgraph'"
+    )
     context_cache_enabled: bool = Field(
         default_factory=lambda: os.getenv("CONTEXT_CACHE_ENABLED", "true").lower() == "true"
     )

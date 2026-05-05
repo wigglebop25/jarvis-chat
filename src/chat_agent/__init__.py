@@ -1,4 +1,5 @@
 from .agent import ChatAgent
+from .langgraph_agent import LangGraphChatAgent
 from .config import AgentConfig, LLMConfig, OpenAIConfig
 from .intent import get_tool_name_for_intent, map_intent_params_to_tool, recognize_intent
 from .llm import LLMProvider, LLMResponse, ToolCall
@@ -52,6 +53,7 @@ def create_agent(config: AgentConfig | None = None, llm_config: LLMConfig | None
 
 __all__ = [
     "ChatAgent",
+    "LangGraphChatAgent",
     "create_agent",
     "recognize_intent",
     "IntentType",
