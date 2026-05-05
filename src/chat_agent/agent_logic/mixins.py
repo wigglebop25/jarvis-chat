@@ -59,6 +59,7 @@ class LLMHandlerMixin:
                 raise RuntimeError("Provider returned tool calls in sync path.")
 
             if response.text:
+                self.last_usage = response.usage
                 self._record_message(MessageRole.ASSISTANT, response.text)
                 self._response_cache_store(
                     key_bundle=key_bundle,
@@ -67,6 +68,7 @@ class LLMHandlerMixin:
                     used_tools=False,
                 )
                 return response.text
+            self.last_usage = response.usage
             self._response_cache_store(
                 key_bundle=key_bundle,
                 response_text="",
@@ -91,6 +93,7 @@ class LLMHandlerMixin:
                 tools_payload=tools_payload,
             )
             if cached_text is not None:
+                self.last_usage = {"cache_hit": True}
                 self._record_message(MessageRole.ASSISTANT, cached_text)
                 return cached_text
 
@@ -99,6 +102,8 @@ class LLMHandlerMixin:
                 raise RuntimeError("LLM provider not initialized for async completion")
             response = await self.llm_provider.complete(messages, tools=tools_payload)
             latency_ms = (time.perf_counter() - request_started) * 1000.0
+            
+            self.last_usage = response.usage
 
             latest_text = ""
             used_tools = bool(response.tool_calls)
@@ -111,11 +116,22 @@ class LLMHandlerMixin:
 
             while response.tool_calls:
                 used_tools = True
+                latest_formatted_results = []
+                has_error = False
+
                 for tool_call in response.tool_calls:
                     executed_call, result_payload = await self._execute_tool_with_reprompt(tool_call)
 
-                    from ..tools.formatter import format_tool_result
-                    formatted_result = format_tool_result(executed_call.name, result_payload.get("result") if isinstance(result_payload, dict) else result_payload)
+                    from ..tools.formatter import format_tool_result, format_tool_error
+                    
+                    if result_payload.get("is_error"):
+                        has_error = True
+                        formatted_result = format_tool_error(executed_call.name, str(result_payload.get("error") or "Unknown error"))
+                    else:
+                        formatted_result = format_tool_result(
+                            executed_call.name, 
+                            result_payload.get("result") if isinstance(result_payload, dict) else result_payload
+                        )
 
                     self._record_message(
                         MessageRole.TOOL,
@@ -123,6 +139,20 @@ class LLMHandlerMixin:
                         tool_call_id=executed_call.id,
                         name=executed_call.name,
                     )
+                    latest_formatted_results.append(formatted_result)
+
+                # EARLY EXIT: If the tool succeeded, don't ask the LLM to summarize
+                if not has_error:
+                    final_text = "\n".join(latest_formatted_results)
+                    self._record_message(MessageRole.ASSISTANT, final_text)
+                    
+                    self._response_cache_store(
+                        key_bundle=key_bundle,
+                        response_text=final_text,
+                        latency_ms=latency_ms,
+                        used_tools=used_tools,
+                    )
+                    return final_text
 
                 messages = self._build_messages()
                 if not self.llm_provider:
