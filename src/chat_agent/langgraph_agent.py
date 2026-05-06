@@ -72,6 +72,7 @@ class LangGraphChatAgent:
             )
 
         self._tool_definitions = get_tool_definitions()
+        self.last_usage = {}
 
     async def process_transcript(self, transcript: str) -> str:
         if not transcript or not transcript.strip():
@@ -88,7 +89,9 @@ class LangGraphChatAgent:
             "session_id": self.session_id,
             "intent": None,
             "execution_error": None,
-            "last_tool_call_id": None
+            "last_tool_call_id": None,
+            "fast_path_executed": None,
+            "usage": None
         }
         
         # Prepare config for nodes (passing dependencies and thread_id)
@@ -113,6 +116,7 @@ class LangGraphChatAgent:
             
             # Update local message history from the graph's state
             self.messages = final_state["messages"]
+            self.last_usage = final_state.get("usage", {})
             
             # Find the latest AIMessage that has content
             for m in reversed(self.messages):
