@@ -11,6 +11,65 @@ from ..response_cache import LLMResponseCache
 from ..context_cache import SessionContextCache
 from ..config import AgentConfig, LLMConfig
 
+async def router_node(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
+    """
+    Node that runs the deterministic Rust hot-path router.
+    """
+    configurable = config.get("configurable", {})
+    mcp_router: Optional[MCPRouter] = configurable.get("mcp_router")
+    
+    if not mcp_router:
+        return {}
+        
+    transcript = ""
+    for m in reversed(state["messages"]):
+        if isinstance(m, HumanMessage):
+            transcript = cast(str, m.content)
+            break
+
+    route_result = await mcp_router.route_and_call(transcript)
+    
+    intent_str = route_result.get("intent", "UNKNOWN").lower()
+    confidence = route_result.get("confidence", 0.0)
+    from ..models import IntentType, Intent
+    try:
+        intent_type = IntentType(intent_str)
+    except ValueError:
+        intent_type = IntentType.UNKNOWN
+
+    intent = Intent(type=intent_type, confidence=confidence,
+                   parameters=route_result.get("arguments", {}), raw_text=transcript)
+    
+    if route_result.get("should_execute") and route_result.get("tool_name"):
+        tool_name = str(route_result.get("tool_name", "unknown"))
+        tool_call_id = f"intent-{len(state['messages'])}"
+        
+        from ..tools.formatter import format_tool_result, format_tool_error
+        
+        if "execution_error" in route_result:
+            error_msg = str(route_result["execution_error"])
+            content = format_tool_error(tool_name, error_msg)
+        else:
+            result_data = route_result.get("execution_result")
+            content = format_tool_result(tool_name, result_data)
+            
+        fake_ai_msg = AIMessage(content="", tool_calls=[{
+            "name": tool_name,
+            "args": route_result.get("arguments", {}),
+            "id": tool_call_id
+        }])
+        tool_msg = ToolMessage(content=content, tool_call_id=tool_call_id, name=tool_name)
+        final_ai_msg = AIMessage(content=content)
+        
+        return {
+            "messages": [fake_ai_msg, tool_msg, final_ai_msg],
+            "intent": intent,
+            "fast_path_executed": True,
+            "usage": {"cache_hit": False, "prompt_tokens": 0, "completion_tokens": 0}
+        }
+        
+    return {"intent": intent, "fast_path_executed": False}
+
 def _map_to_provider_messages(messages: list[Any]) -> list[Dict[str, str]]:
     """Map LangChain messages to the provider format."""
     provider_messages = []
@@ -123,7 +182,7 @@ async def call_model(state: AgentState, config: RunnableConfig) -> Dict[str, Any
     # Cache Lookup
     cached_text, key_bundle = _cache_lookup(state, config)
     if cached_text is not None:
-        return {"messages": [AIMessage(content=cached_text)]}
+        return {"messages": [AIMessage(content=cached_text)], "usage": {"cache_hit": True}}
         
     messages = _get_context_filtered_messages(state, config)
     
@@ -162,7 +221,7 @@ async def call_model(state: AgentState, config: RunnableConfig) -> Dict[str, Any
         else:
             response_cache.record_skip(store_decision.reason)
         
-    return {"messages": new_messages}
+    return {"messages": new_messages, "usage": response.usage}
 
 async def execute_tools(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
     """

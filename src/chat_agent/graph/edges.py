@@ -2,6 +2,14 @@ from typing import Literal
 from langchain_core.messages import AIMessage
 from .state import AgentState
 
+def route_after_router(state: AgentState) -> Literal["agent", "__end__"]:
+    """
+    Determines if the graph should go to the LLM agent or end (if fast path was executed).
+    """
+    if state.get("fast_path_executed"):
+        return "__end__"
+    return "agent"
+
 def should_continue(state: AgentState) -> Literal["tools", "__end__"]:
     """
     Determines if the graph should continue to tool execution or end.

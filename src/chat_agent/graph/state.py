@@ -1,4 +1,4 @@
-from typing import Annotated, TypedDict, Any, Optional
+from typing import Annotated, TypedDict, Any, Optional, Dict
 from langgraph.graph.message import add_messages
 from ..models import Intent
 
@@ -20,3 +20,10 @@ class AgentState(TypedDict):
     
     # Track the last tool call for repair/reprompt logic.
     last_tool_call_id: Optional[str]
+    
+    # Track if the deterministic fast path was executed
+    fast_path_executed: Optional[bool]
+    
+    # Track LLM token usage stats
+    usage: Optional[Dict[str, Any]]
+
