@@ -1,6 +1,13 @@
 from typing import Annotated, TypedDict, Any, Optional, Dict
 from langgraph.graph.message import add_messages
-from ..models import Intent
+
+
+class IntentState(TypedDict):
+    """Primitive-only intent snapshot persisted in checkpoints."""
+    type: str
+    confidence: float
+    parameters: Dict[str, Any]
+    raw_text: str
 
 class AgentState(TypedDict):
     """
@@ -10,7 +17,7 @@ class AgentState(TypedDict):
     messages: Annotated[list[Any], add_messages]
     
     # The recognized intent from the user transcript.
-    intent: Optional[Intent]
+    intent: Optional[IntentState]
     
     # Metadata for the current session.
     session_id: str

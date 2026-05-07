@@ -11,6 +11,25 @@ from ..response_cache import LLMResponseCache
 from ..context_cache import SessionContextCache
 from ..config import AgentConfig, LLMConfig
 
+REASONING_LEAKAGE_MARKERS = (
+    "the user is asking",
+    "i should",
+    "i need to",
+    "looking back at",
+)
+
+
+def _sanitize_assistant_text(text: str) -> str:
+    cleaned = (text or "").strip()
+    lowered = cleaned.lower()
+    if not cleaned or not any(marker in lowered for marker in REASONING_LEAKAGE_MARKERS):
+        return cleaned
+
+    lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
+    if not lines:
+        return cleaned
+    return lines[-1]
+
 async def router_node(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
     """
     Node that runs the deterministic Rust hot-path router.
@@ -31,14 +50,18 @@ async def router_node(state: AgentState, config: RunnableConfig) -> Dict[str, An
     
     intent_str = route_result.get("intent", "UNKNOWN").lower()
     confidence = route_result.get("confidence", 0.0)
-    from ..models import IntentType, Intent
+    from ..models import IntentType
     try:
         intent_type = IntentType(intent_str)
     except ValueError:
         intent_type = IntentType.UNKNOWN
 
-    intent = Intent(type=intent_type, confidence=confidence,
-                   parameters=route_result.get("arguments", {}), raw_text=transcript)
+    intent = {
+        "type": intent_type.value,
+        "confidence": float(confidence),
+        "parameters": route_result.get("arguments", {}),
+        "raw_text": transcript,
+    }
     
     if route_result.get("should_execute") and route_result.get("tool_name"):
         tool_name = str(route_result.get("tool_name", "unknown"))
@@ -138,11 +161,12 @@ def _cache_lookup(state: AgentState, config: RunnableConfig) -> Tuple[Optional[s
             break
             
     intent = state.get("intent")
+    intent_type = intent.get("type") if intent else None
     tools_payload = configurable.get("tools_payload")
     
     decision = response_cache.evaluate_eligibility(
         transcript=transcript,
-        intent_type=intent.type.value if intent else None,
+        intent_type=intent_type,
         supports_tools=llm_provider.supports_tools,
         tools_payload=tools_payload,
         allow_tool_providers=agent_config.llm_response_cache_allow_tool_providers,
@@ -200,17 +224,18 @@ async def call_model(state: AgentState, config: RunnableConfig) -> Dict[str, Any
                 "id": tc.id
             })
     
-    ai_message = AIMessage(content=response.text or "", tool_calls=tool_calls)
+    sanitized_text = _sanitize_assistant_text(response.text or "")
+    ai_message = AIMessage(content=sanitized_text, tool_calls=tool_calls)
     new_messages.append(ai_message)
     
     # Cache Store
-    if response_cache and key_bundle and llm_config and not tool_calls and response.text:
-        store_decision = response_cache.should_store_response(response.text)
+    if response_cache and key_bundle and llm_config and not tool_calls and sanitized_text:
+        store_decision = response_cache.should_store_response(sanitized_text)
         if store_decision.cacheable:
             cache_key, transcript_key, tools_fingerprint = key_bundle
             response_cache.store(
                 key=cache_key,
-                response_text=response.text,
+                response_text=sanitized_text,
                 source_latency_ms=latency_ms,
                 session_id=state["session_id"],
                 provider=llm_config.provider,
