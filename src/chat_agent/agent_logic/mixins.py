@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from ..message_builder import MessageBuilder
     from ..tool_discovery import ToolDiscovery
     from ..skills import ToolErrorRepromptSkill
-    from ..mcp import MCPRouter
+    from ..mcp.router_protocol import MCPRouterLike
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +182,7 @@ class ToolHandlerMixin:
     tool_discovery: ToolDiscovery
     message_builder: MessageBuilder
     response_cache: Optional[LLMResponseCache]
-    mcp_router: MCPRouter
+    mcp_router: MCPRouterLike
     tool_error_reprompt_skill: ToolErrorRepromptSkill
 
     async def _refresh_tool_definitions(self: Any) -> None:

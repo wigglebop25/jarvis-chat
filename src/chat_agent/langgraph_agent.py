@@ -7,6 +7,7 @@ from langchain_core.runnables import RunnableConfig
 from .config import AgentConfig, LLMConfig
 from .llm import create_provider
 from .mcp import MCPRouter
+from .mcp.multi_endpoint_router import MultiEndpointMCPRouter
 from .graph.builder import create_graph
 from .models import MessageRole, ChatMessage
 from .tools.definitions import get_tool_definitions
@@ -38,9 +39,15 @@ class LangGraphChatAgent:
         except Exception as e:
             logger.warning(f"Could not initialize LLM provider: {e}. Using fallback mode.")
 
-        from .mcp.client import MCPClient
-        mcp_client = MCPClient(base_url=self.config.mcp.url)
-        self.mcp_router = MCPRouter(mcp_client=mcp_client)
+        if self.config.mcp.multi_endpoint_enabled:
+            self.mcp_router = MultiEndpointMCPRouter(
+                system_endpoint=self.config.mcp.system_url,
+                spotify_endpoint=self.config.mcp.spotify_url,
+            )
+        else:
+            from .mcp.client import MCPClient
+            mcp_client = MCPClient(base_url=self.config.mcp.url)
+            self.mcp_router = MCPRouter(mcp_client=mcp_client)
         
         from .skills import ToolErrorRepromptSkill
         self.tool_error_reprompt_skill = ToolErrorRepromptSkill(

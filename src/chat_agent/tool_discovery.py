@@ -8,7 +8,7 @@ with fallback to bundled schemas.
 import logging
 from typing import Any, Optional
 
-from .mcp import MCPRouter
+from .mcp.router_protocol import MCPRouterLike
 from .tools.definitions import normalize_mcp_tool_definitions
 
 logger = logging.getLogger(__name__)
@@ -17,12 +17,12 @@ logger = logging.getLogger(__name__)
 class ToolDiscovery:
     """Manages dynamic tool definition discovery from MCP server."""
     
-    def __init__(self, mcp_router: MCPRouter, bundled_tools: list[dict[str, Any]]):
+    def __init__(self, mcp_router: MCPRouterLike, bundled_tools: list[dict[str, Any]]):
         """
         Initialize tool discovery.
         
         Args:
-            mcp_router: MCPRouter instance for tool discovery
+            mcp_router: MCP router instance for tool discovery
             bundled_tools: Fallback bundled tool definitions
         """
         self.mcp_router = mcp_router

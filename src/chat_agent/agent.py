@@ -13,7 +13,7 @@ from typing import Any, Optional
 from .config import AgentConfig, LLMConfig
 from .context_cache import SessionContextCache
 from .llm import create_provider
-from .mcp import MCPRouter
+from .mcp.multi_endpoint_router import MultiEndpointMCPRouter
 from .models import ConversationContext, Intent, IntentType, MessageRole
 from .response_cache import LLMResponseCache
 from .skills import ToolErrorRepromptSkill
@@ -53,9 +53,19 @@ class ChatAgent(LLMHandlerMixin, ToolHandlerMixin, CacheHandlerMixin):
         except Exception as e:
             logger.warning(f"Could not initialize LLM provider: {e}. Using fallback mode.")
 
-        from .mcp.client import MCPClient
-        mcp_client = MCPClient(base_url=self.config.mcp.url)
-        self.mcp_router = MCPRouter(mcp_client=mcp_client)
+        # Initialize multi-endpoint MCP router
+        if self.config.mcp.multi_endpoint_enabled:
+            self.mcp_router = MultiEndpointMCPRouter(
+                system_endpoint=self.config.mcp.system_url,
+                spotify_endpoint=self.config.mcp.spotify_url,
+            )
+        else:
+            # Fallback to single-endpoint router for backward compatibility
+            from .mcp import MCPRouter
+            from .mcp.client import MCPClient
+            mcp_client = MCPClient(base_url=self.config.mcp.url)
+            self.mcp_router = MCPRouter(mcp_client=mcp_client)
+        
         self.tool_error_reprompt_skill = ToolErrorRepromptSkill(
             max_retries=self.config.tool_retry_attempts,
             base_backoff_seconds=self.config.tool_retry_backoff_seconds,

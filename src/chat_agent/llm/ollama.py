@@ -158,5 +158,9 @@ class OllamaProvider(LLMProvider):
             except httpx.HTTPError as e:
                 raise LLMProviderError(f"Ollama streaming failed: {e}") from e
 
+    def count_tokens(self, text: str) -> int:
+        """Estimate token count (approximate: ~4 chars per token)."""
+        return len(text) // 4 + 1
+
     def __del__(self):
         self.client.close()

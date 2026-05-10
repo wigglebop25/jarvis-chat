@@ -4,7 +4,7 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, Tool
 from langchain_core.runnables import RunnableConfig
 from .state import AgentState
 from ..llm.base import LLMProvider
-from ..mcp import MCPRouter
+from ..mcp.router_protocol import MCPRouterLike
 from ..models import MessageRole
 from ..skills import ToolErrorRepromptSkill
 from ..response_cache import LLMResponseCache
@@ -35,7 +35,7 @@ async def router_node(state: AgentState, config: RunnableConfig) -> Dict[str, An
     Node that runs the deterministic Rust hot-path router.
     """
     configurable = config.get("configurable", {})
-    mcp_router: Optional[MCPRouter] = configurable.get("mcp_router")
+    mcp_router: Optional[MCPRouterLike] = configurable.get("mcp_router")
     
     if not mcp_router:
         return {}
@@ -256,7 +256,7 @@ async def execute_tools(state: AgentState, config: RunnableConfig) -> Dict[str, 
     Node that executes tool calls.
     """
     configurable = config.get("configurable", {})
-    mcp_router: Optional[MCPRouter] = configurable.get("mcp_router")
+    mcp_router: Optional[MCPRouterLike] = configurable.get("mcp_router")
     
     if not mcp_router:
         raise ValueError("MCP router not found in config")

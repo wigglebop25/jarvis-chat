@@ -99,9 +99,32 @@ class MCPConfig(BaseModel):
     retry_attempts: int = Field(default=3)
     retry_delay: float = Field(default=1.0)
     
+    # Multi-endpoint support
+    system_host: str = Field(default_factory=lambda: os.getenv("MCP_SYSTEM_HOST", "localhost"))
+    system_port: int = Field(default_factory=lambda: _get_int_env("MCP_SYSTEM_PORT", 5050))
+    
+    spotify_host: str = Field(default_factory=lambda: os.getenv("MCP_SPOTIFY_HOST", "localhost"))
+    spotify_port: int = Field(default_factory=lambda: _get_int_env("MCP_SPOTIFY_PORT", 3000))
+    
+    # Enable multi-endpoint routing
+    multi_endpoint_enabled: bool = Field(
+        default_factory=lambda: _get_bool_env("MCP_MULTI_ENDPOINT_ENABLED", True)
+    )
+    
     @property
     def url(self) -> str:
+        """Primary MCP server URL (system)."""
         return f"http://{self.host}:{self.port}"
+    
+    @property
+    def system_url(self) -> str:
+        """System MCP server URL."""
+        return f"http://{self.system_host}:{self.system_port}"
+    
+    @property
+    def spotify_url(self) -> str:
+        """Spotify MCP server URL."""
+        return f"http://{self.spotify_host}:{self.spotify_port}"
 
 
 class AgentConfig(BaseModel):

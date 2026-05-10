@@ -1,16 +1,10 @@
 import os
-import warnings
 import logging
+import asyncio
+import warnings
 from typing import Any, AsyncGenerator, Optional
 
-from google.generativeai.client import configure
-from google.generativeai.generative_models import GenerativeModel
-from google.generativeai.types import GenerationConfig
-
 from .base import LLMProvider, LLMConfigurationError, LLMProviderError, LLMResponse, ToolCall
-
-# Suppress FutureWarning from deprecated google.generativeai
-warnings.filterwarnings("ignore", category=FutureWarning)
 
 logger = logging.getLogger(__name__)
 
@@ -29,13 +23,24 @@ class GeminiProvider(LLMProvider):
         if not api_key:
             raise LLMConfigurationError("GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set")
 
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            from google.generativeai.client import configure
+            from google.generativeai.generative_models import GenerativeModel
+            from google.generativeai.types import GenerationConfig
+
+        # Store imported SDK symbols to keep usage local and warning-free
+        self._GenerativeModel = GenerativeModel
+        self._GenerationConfig = GenerationConfig
+
         # Set API key via environment or direct parameter
         configure(api_key=api_key)
         self.api_key = api_key
         self.model = model
         self.temperature = temperature or 0.7
         self.max_tokens = max_tokens or 2048
-        self.client = GenerativeModel(model)
+        self.request_timeout_seconds = float(os.getenv("GEMINI_REQUEST_TIMEOUT_SECONDS", "30"))
+        self.client = self._GenerativeModel(model)
 
     @property
     def name(self) -> str:
@@ -215,7 +220,7 @@ class GeminiProvider(LLMProvider):
         try:
             kwargs = {
                 "stream": False,
-                "generation_config": GenerationConfig(
+                "generation_config": self._GenerationConfig(
                     temperature=self.temperature,
                     max_output_tokens=self.max_tokens,
                 ),
@@ -244,7 +249,7 @@ class GeminiProvider(LLMProvider):
                             tools=gemini_tools,
                             ttl=datetime.timedelta(minutes=5),
                         )
-                        client = GenerativeModel.from_cached_content(cached_content=cache)
+                        client = self._GenerativeModel.from_cached_content(cached_content=cache)
                         contents = [contents[-1]]
                     except Exception:
                         pass # Fallback to normal execution
@@ -279,7 +284,7 @@ class GeminiProvider(LLMProvider):
         try:
             kwargs = {
                 "stream": False,
-                "generation_config": GenerationConfig(
+                "generation_config": self._GenerationConfig(
                     temperature=self.temperature,
                     max_output_tokens=self.max_tokens,
                 ),
@@ -308,13 +313,16 @@ class GeminiProvider(LLMProvider):
                             tools=gemini_tools,
                             ttl=datetime.timedelta(minutes=5),
                         )
-                        client = GenerativeModel.from_cached_content(cached_content=cache)
+                        client = self._GenerativeModel.from_cached_content(cached_content=cache)
                         contents = [contents[-1]]
                     except Exception:
                         pass
 
             try:
-                response = await client.generate_content_async(contents, **kwargs)
+                response = await asyncio.wait_for(
+                    client.generate_content_async(contents, **kwargs),
+                    timeout=self.request_timeout_seconds,
+                )
             finally:
                 if cache:
                     try:
@@ -330,6 +338,10 @@ class GeminiProvider(LLMProvider):
                 model=self.model,
                 usage=self._usage_from_response(response),
             )
+        except asyncio.TimeoutError as e:
+            raise LLMProviderError(
+                f"Gemini request timed out after {self.request_timeout_seconds:.0f}s"
+            ) from e
         except Exception as e:
             import traceback
             logger.error(f"Gemini API Error: {e}\n{traceback.format_exc()}")
@@ -344,7 +356,7 @@ class GeminiProvider(LLMProvider):
             stream_response = await self.client.generate_content_async(
                 self._to_contents(messages),
                 stream=True,
-                generation_config=GenerationConfig(
+                generation_config=self._GenerationConfig(
                     temperature=self.temperature,
                     max_output_tokens=self.max_tokens,
                 ),
