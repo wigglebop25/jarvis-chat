@@ -161,8 +161,10 @@ class ChatAgent(LLMHandlerMixin, ToolHandlerMixin, CacheHandlerMixin):
         if hasattr(self, "_delegate"):
             return self._delegate.clear_context()
         self.context.clear(keep_system=True)
-        if self.context_cache: self.context_cache.clear_session(self.session_id)
-        if self.response_cache: self.response_cache.invalidate_session(self.session_id)
+        if self.context_cache:
+            self.context_cache.clear_session(self.session_id)
+        if self.response_cache:
+            self.response_cache.invalidate_session(self.session_id)
 
     def change_model(self, model_name: str, provider_name: Optional[str] = None) -> None:
         """Dynamically change the LLM model and optionally the provider."""
@@ -202,11 +204,13 @@ class ChatAgent(LLMHandlerMixin, ToolHandlerMixin, CacheHandlerMixin):
     def register_context_artifact(self, name: str, values: list[float], source_dtype: str = "fp32") -> dict:
         if hasattr(self, "_delegate"):
             return self._delegate.register_context_artifact(name, values, source_dtype)
-        if not self.context_cache: raise RuntimeError("Context cache disabled.")
+        if not self.context_cache:
+            raise RuntimeError("Context cache disabled.")
         return self.context_cache.register_artifact(self.session_id, name, values, source_dtype).to_dict()
 
     def convert_context_artifact_dtype(self, name: str, target_dtype: str) -> dict:
         if hasattr(self, "_delegate"):
             return self._delegate.convert_context_artifact_dtype(name, target_dtype)
-        if not self.context_cache: raise RuntimeError("Context cache disabled.")
+        if not self.context_cache:
+            raise RuntimeError("Context cache disabled.")
         return self.context_cache.convert_artifact_dtype(self.session_id, name, target_dtype).to_dict()

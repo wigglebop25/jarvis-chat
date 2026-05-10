@@ -29,7 +29,8 @@ def get_git_info():
     import subprocess
     try:
         b = subprocess.run(['git', 'branch', '--show-current'], capture_output=True, text=True, check=True).stdout.strip()
-        if b: return f" [⎇ {b}]"
+        if b:
+            return f" [⎇ {b}]"
     except Exception:
         pass
     return ""
@@ -37,7 +38,8 @@ def get_git_info():
 def print_banner():
     import shutil
     cols = shutil.get_terminal_size().columns
-    if cols > 100: cols = 100
+    if cols > 100:
+        cols = 100
     
     banner = f"""╭{'─'*(cols-2)}╮
 │  ╭─╮╭─╮{' '*(cols-11)}│
@@ -54,7 +56,8 @@ def print_banner():
     console.print(banner)
 
 def print_prompt_header(agent):
-    import shutil, os
+    import shutil
+    import os
     cols = shutil.get_terminal_size().columns
     cwd = os.getcwd()
     git_info = get_git_info()
@@ -116,10 +119,14 @@ def show_help():
 def is_core_model(m):
     """Filter out weird obscure models unless it's a common one."""
     m_lower = m.lower()
-    if "tts" in m_lower or "vision" in m_lower or "image" in m_lower or "robotics" in m_lower: return False
-    if "banana" in m_lower or "lyria" in m_lower or "deep-research" in m_lower: return False
-    if "embedding" in m_lower or "bison" in m_lower or "learnlm" in m_lower: return False
-    if "preview" in m_lower and not ("pro" in m_lower or "flash" in m_lower): return False
+    if "tts" in m_lower or "vision" in m_lower or "image" in m_lower or "robotics" in m_lower:
+        return False
+    if "banana" in m_lower or "lyria" in m_lower or "deep-research" in m_lower:
+        return False
+    if "embedding" in m_lower or "bison" in m_lower or "learnlm" in m_lower:
+        return False
+    if "preview" in m_lower and not ("pro" in m_lower or "flash" in m_lower):
+        return False
     return True
 
 def handle_model_switch(agent):

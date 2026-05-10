@@ -176,9 +176,11 @@ class LangGraphChatAgent:
         return stats
 
     def register_context_artifact(self, name: str, values: list[float], source_dtype: str = "fp32") -> dict:
-        if not self.context_cache: raise RuntimeError("Context cache disabled.")
+        if not self.context_cache:
+            raise RuntimeError("Context cache disabled.")
         return self.context_cache.register_artifact(self.session_id, name, values, source_dtype).to_dict()
 
     def convert_context_artifact_dtype(self, name: str, target_dtype: str) -> dict:
-        if not self.context_cache: raise RuntimeError("Context cache disabled.")
+        if not self.context_cache:
+            raise RuntimeError("Context cache disabled.")
         return self.context_cache.convert_artifact_dtype(self.session_id, name, target_dtype).to_dict()

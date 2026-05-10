@@ -131,9 +131,12 @@ def _get_context_filtered_messages(state: AgentState, config: RunnableConfig) ->
         context_cache.clear_session(session_id)
         for m in state["messages"]:
             role = "assistant"
-            if isinstance(m, HumanMessage): role = "user"
-            elif isinstance(m, SystemMessage): role = "system"
-            elif isinstance(m, ToolMessage): role = "tool"
+            if isinstance(m, HumanMessage):
+                role = "user"
+            elif isinstance(m, SystemMessage):
+                role = "system"
+            elif isinstance(m, ToolMessage):
+                role = "tool"
             content = cast(str, m.content)
             context_cache.add_message(session_id, role, content)
             

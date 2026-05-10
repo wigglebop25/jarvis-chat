@@ -1,9 +1,7 @@
 import os
 import warnings
+import logging
 from typing import Any, AsyncGenerator, Optional
-
-# Suppress FutureWarning from deprecated google.generativeai
-warnings.filterwarnings("ignore", category=FutureWarning)
 
 from google.generativeai.client import configure
 from google.generativeai.generative_models import GenerativeModel
@@ -11,7 +9,9 @@ from google.generativeai.types import GenerationConfig
 
 from .base import LLMProvider, LLMConfigurationError, LLMProviderError, LLMResponse, ToolCall
 
-import logging
+# Suppress FutureWarning from deprecated google.generativeai
+warnings.filterwarnings("ignore", category=FutureWarning)
+
 logger = logging.getLogger(__name__)
 
 
@@ -246,7 +246,7 @@ class GeminiProvider(LLMProvider):
                         )
                         client = GenerativeModel.from_cached_content(cached_content=cache)
                         contents = [contents[-1]]
-                    except Exception as e:
+                    except Exception:
                         pass # Fallback to normal execution
 
             try:
@@ -310,7 +310,7 @@ class GeminiProvider(LLMProvider):
                         )
                         client = GenerativeModel.from_cached_content(cached_content=cache)
                         contents = [contents[-1]]
-                    except Exception as e:
+                    except Exception:
                         pass
 
             try:
