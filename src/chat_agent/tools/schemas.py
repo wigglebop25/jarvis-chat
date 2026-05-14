@@ -136,7 +136,8 @@ def validate_tool_params(tool: dict[str, Any], params: dict[str, Any]) -> Tuple[
 
     try:
         import jsonschema  # type: ignore
-        from jsonschema.exceptions import ValidationError
+        # Use dynamic access to avoid static analyzer errors on missing optional deps
+        ValidationError = getattr(getattr(jsonschema, "exceptions", {}), "ValidationError", Exception)
 
         try:
             jsonschema.validate(instance=params or {}, schema=schema)
