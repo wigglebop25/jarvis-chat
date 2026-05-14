@@ -1,7 +1,7 @@
 from langgraph.graph import StateGraph
 from langgraph.checkpoint.memory import MemorySaver
 from .state import AgentState
-from .nodes import router_node, call_model, execute_tools, handle_tool_error
+from .nodes import router_node, call_model, execute_tools, handle_tool_error, retrieve_context_node
 from .edges import route_after_router, should_continue, check_for_errors
 
 def create_graph():
@@ -12,6 +12,7 @@ def create_graph():
     
     # Add nodes
     workflow.add_node("router", router_node)
+    workflow.add_node("rag", retrieve_context_node)
     workflow.add_node("agent", call_model)
     workflow.add_node("tools", execute_tools)
     workflow.add_node("repair", handle_tool_error)
@@ -23,7 +24,13 @@ def create_graph():
     workflow.add_conditional_edges(
         "router",
         route_after_router,
+        {
+            "agent": "rag",
+            "__end__": "__end__"
+        }
     )
+    
+    workflow.add_edge("rag", "agent")
     
     workflow.add_conditional_edges(
         "agent",

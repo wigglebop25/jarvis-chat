@@ -33,4 +33,7 @@ class AgentState(TypedDict):
     
     # Track LLM token usage stats
     usage: Optional[Dict[str, Any]]
+    
+    # RAG context for injection into prompt
+    rag_context: Optional[str]
 
