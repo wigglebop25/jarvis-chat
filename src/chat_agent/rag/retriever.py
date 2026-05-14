@@ -11,9 +11,14 @@ logger = logging.getLogger(__name__)
 class RagRetriever:
     """Retrieves relevant cached data to augment LLM prompts."""
     
-    def __init__(self):
-        """Initialize the RAG retriever."""
-        self.vector_store = get_vector_store()
+    def __init__(self, vector_store: Optional[Any] = None):
+        """
+        Initialize the RAG retriever.
+        
+        Args:
+            vector_store: Vector store instance (falls back to singleton if None)
+        """
+        self.vector_store = vector_store or get_vector_store()
     
     def retrieve_context(self, query: str, intent: Optional[str] = None, top_k: int = 3) -> dict[str, Any]:
         """
@@ -27,7 +32,7 @@ class RagRetriever:
         Returns:
             Dictionary with retrieved context organized by category
         """
-        context = {
+        context: dict[str, Any] = {
             'playlists': [],
             'tracks': [],
             'genres': [],

@@ -1,45 +1,26 @@
 """Mood learning and correlation analysis for personalized recommendations."""
 
 import logging
-import re
-import sqlite3
-from collections import Counter
-from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from .detector import MoodDetector
+from .cache import MoodCorrelationCache, load_user_actions_from_db, analyze_mood_correlations
 
-CACHE_DIR = Path.home() / ".jarvis" / "cache"
-VECTOR_DB_PATH = CACHE_DIR / "vector_store.db"
+logger = logging.getLogger(__name__)
 
 
 class MoodAnalyzer:
     """Analyzes user query patterns to find mood correlations."""
     
-    # Mood keywords and their related terms
-    MOOD_KEYWORDS = {
-        'happy': ['happy', 'cheerful', 'upbeat', 'energetic', 'fun', 'positive', 'good', 'awesome'],
-        'sad': ['sad', 'sad', 'cry', 'crying', 'blue', 'down', 'depressed', 'heartbreak', 'lonely'],
-        'workout': ['workout', 'gym', 'exercise', 'run', 'running', 'train', 'pump', 'pump up', 'energy'],
-        'chill': ['chill', 'relax', 'calm', 'peace', 'quiet', 'lounge', 'mellow', 'laid back', 'cool'],
-        'focused': ['focus', 'study', 'work', 'coding', 'productive', 'concentrate', 'thinking', 'thinking'],
-        'party': ['party', 'dance', 'club', 'dance', 'dancing', 'celebrate', 'celebration', 'fun'],
-        'romantic': ['love', 'romantic', 'date', 'romance', 'sweet', 'intimate', 'cozy'],
-        'sleep': ['sleep', 'sleepy', 'tired', 'bed', 'night', 'before sleep', 'relaxing'],
-    }
-    
-    def __init__(self):
-        """Initialize the mood analyzer."""
-        self.mood_regex = self._compile_mood_regex()
-    
-    def _compile_mood_regex(self) -> dict[str, re.Pattern]:
-        """Compile regex patterns for each mood."""
-        patterns = {}
-        for mood, keywords in self.MOOD_KEYWORDS.items():
-            # Create case-insensitive regex with word boundaries
-            pattern_str = r'\b(' + '|'.join(keywords) + r')\b'
-            patterns[mood] = re.compile(pattern_str, re.IGNORECASE)
-        return patterns
+    def __init__(self, cache_ttl_seconds: int = 3600):
+        """
+        Initialize the mood analyzer.
+        
+        Args:
+            cache_ttl_seconds: TTL for cached correlations (default 1 hour)
+        """
+        self.detector = MoodDetector()
+        self.cache = MoodCorrelationCache(ttl_seconds=cache_ttl_seconds)
     
     def extract_mood_keywords(self, query: str) -> list[str]:
         """
@@ -51,79 +32,53 @@ class MoodAnalyzer:
         Returns:
             List of detected mood keywords
         """
-        moods = []
-        for mood, pattern in self.mood_regex.items():
-            if pattern.search(query):
-                moods.append(mood)
-        return moods
+        return self.detector.extract_mood_keywords(query)
     
     def analyze_correlations(self, min_samples: int = 5, top_k: int = 3) -> dict[str, Any]:
         """
         Analyze user action history to find mood-to-entity correlations.
+        
+        Uses cache to avoid repeated database queries within TTL window.
         
         Args:
             min_samples: Minimum number of samples before accepting a correlation
             top_k: Number of top entities to return per mood
             
         Returns:
-            Dictionary mapping mood -> list of (entity_id, entity_name, confidence)
+            Dictionary mapping mood -> list of correlation objects with confidence
         """
+        # Try to use cached result
+        cached = self.cache.get_correlations()
+        if cached is not None:
+            logger.debug("Using cached mood correlations")
+            return cached
+        
         try:
-            conn = sqlite3.connect(str(VECTOR_DB_PATH))
-            cursor = conn.cursor()
-            
-            # Get all user actions
-            cursor.execute("""
-                SELECT query, tool_name, result_type FROM user_actions
-                ORDER BY timestamp DESC
-                LIMIT 500
-            """)
-            
-            actions = cursor.fetchall()
-            conn.close()
+            # Load actions from database
+            actions = load_user_actions_from_db(limit=500)
             
             if not actions:
                 logger.debug("No user actions found for mood analysis")
                 return {}
             
-            # Group by detected mood
-            mood_correlations = {}
-            
+            # Map queries to moods
+            moods_per_action = {}
             for query, tool_name, result_type in actions:
-                moods = self.extract_mood_keywords(query)
-                
-                for mood in moods:
-                    if mood not in mood_correlations:
-                        mood_correlations[mood] = Counter()
-                    
-                    # Count correlations (preference: result_type > tool_name)
-                    key = result_type or tool_name or 'unknown'
-                    mood_correlations[mood][key] += 1
+                moods_per_action[query] = self.extract_mood_keywords(query)
             
-            # Filter and format results
-            result = {}
-            for mood, correlations in mood_correlations.items():
-                total = sum(correlations.values())
-                
-                # Only include moods with enough samples
-                if total < min_samples:
-                    continue
-                
-                # Get top-k with confidence scores
-                top_items = []
-                for entity, count in correlations.most_common(top_k):
-                    confidence = count / total
-                    top_items.append({
-                        'entity': entity,
-                        'count': count,
-                        'confidence': confidence,
-                    })
-                
-                if top_items:
-                    result[mood] = top_items
+            # Analyze correlations
+            correlations = analyze_mood_correlations(
+                moods_per_action=moods_per_action,
+                actions=actions,
+                min_samples=min_samples,
+                top_k=top_k,
+            )
             
-            logger.info(f"Found {len(result)} mood correlations from {len(actions)} actions")
-            return result
+            # Cache the results
+            if correlations:
+                self.cache.set_correlations(correlations)
+            
+            return correlations
             
         except Exception as e:
             logger.error(f"Failed to analyze mood correlations: {e}")
@@ -208,6 +163,19 @@ class MoodAnalyzer:
         except Exception as e:
             logger.debug(f"Failed to get mood recommendations: {e}")
             return []
+    
+    def get_cache_stats(self) -> dict[str, Any]:
+        """
+        Get statistics about the mood correlation cache.
+        
+        Returns:
+            Dictionary with cache info
+        """
+        return self.cache.get_stats()
+    
+    def clear_cache(self) -> None:
+        """Clear the mood correlation cache."""
+        self.cache.invalidate()
 
 
 # Singleton instance
