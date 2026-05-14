@@ -20,6 +20,8 @@ class MultiEndpointMCPRouter:
         mcp_client: Optional[MultiEndpointMCPClient] = None,
         system_endpoint: Optional[str] = None,
         spotify_endpoint: Optional[str] = None,
+        system_transport: str = "http",
+        spotify_transport: str = "http",
     ):
         """
         Initialize multi-endpoint router.
@@ -28,10 +30,14 @@ class MultiEndpointMCPRouter:
             mcp_client: Custom MultiEndpointMCPClient instance
             system_endpoint: Custom system MCP server endpoint
             spotify_endpoint: Custom Spotify MCP server endpoint
+            system_transport: Transport type for system endpoint
+            spotify_transport: Transport type for spotify endpoint
         """
         self.mcp_client = mcp_client or MultiEndpointMCPClient(
             system_endpoint=system_endpoint,
             spotify_endpoint=spotify_endpoint,
+            system_transport=system_transport,
+            spotify_transport=spotify_transport,
         )
 
     async def execute_tool(
@@ -50,13 +56,8 @@ class MultiEndpointMCPRouter:
             )
             return MCPToolResult(result=result)
         except Exception as exc:
-            # Determine which server failed
-            endpoint_hint = "Spotify" if name in self.mcp_client.ENDPOINT_MAP["spotify"] else "Rust"
             return MCPToolResult(
-                error=(
-                    f"{endpoint_hint} MCP tool execution failed: {exc}. "
-                    f"Ensure the {endpoint_hint.lower()} MCP server is running."
-                ),
+                error=f"MCP tool execution failed for {name}: {exc}",
                 is_error=True,
             )
 

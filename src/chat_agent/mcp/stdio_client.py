@@ -75,10 +75,10 @@ class StdioMCPClient:
             arguments = safe_params.get("arguments", {})
             logger.debug(f"[stdio_client] Tool Call: {tool_name} with {json.dumps(arguments)}")
             
-            result = await self.session.call_tool(tool_name, arguments)
+            call_result = await self.session.call_tool(tool_name, arguments)
             
             content = []
-            for item in result.content:
+            for item in call_result.content:
                 # Use getattr to safely access 'text' and satisfy Pylance
                 text = getattr(item, "text", None)
                 if text is not None:
@@ -94,10 +94,10 @@ class StdioMCPClient:
 
         elif method == "tools/list":
             logger.debug("[stdio_client] Fetching tool list...")
-            result = await self.session.list_tools()
+            list_result = await self.session.list_tools()
             
             tool_defs = []
-            for t in result.tools:
+            for t in list_result.tools:
                 if hasattr(t, "model_dump"):
                     tool_defs.append(t.model_dump())
                 elif isinstance(t, dict):
