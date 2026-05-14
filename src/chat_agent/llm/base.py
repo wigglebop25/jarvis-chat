@@ -57,6 +57,10 @@ class LLMProvider(ABC):
         """Fetch available models from the provider's API."""
         return [getattr(self, "model", "")]
 
+    def get_available_models_detailed(self) -> list[dict[str, Any]]:
+        """Fetch available models with metadata like context limits."""
+        return [{"name": m, "input_token_limit": 0} for m in self.get_available_models()]
+
     @abstractmethod
     def complete_sync(
         self,
@@ -82,4 +86,6 @@ class LLMProvider(ABC):
         tools: Optional[list[dict[str, Any]]] = None,
     ) -> AsyncGenerator[str, None]:
         """Stream response text. Yields text chunks."""
+        if False:
+            yield ""
         ...

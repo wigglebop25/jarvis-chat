@@ -1,7 +1,10 @@
 from .base import LLMProvider, LLMProviderError
 
 # Lazy imports - only load what's needed
-PROVIDER_CLASSES = {}
+from typing import Any
+
+# Mapping from provider name to provider class (kept Any to avoid abstract-type restrictions)
+PROVIDER_CLASSES: dict[str, Any] = {}
 
 
 def _load_provider(name: str):

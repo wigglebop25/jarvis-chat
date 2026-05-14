@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, AsyncGenerator, Optional
+from typing import Any, AsyncGenerator, Optional, cast
 
 from openai import AsyncOpenAI, OpenAI
 
@@ -187,9 +187,14 @@ class OpenAIProvider(LLMProvider):
 
             async with self.async_client.chat.completions.stream(**kwargs) as stream:
                 async for chunk in stream:
-                    if hasattr(chunk, 'choices') and chunk.choices:  # type: ignore
-                        delta = chunk.choices[0].delta  # type: ignore
-                        if hasattr(delta, 'content') and delta.content:
-                            yield delta.content
+                    # Cast streaming event to Any to satisfy static type checkers (openai runtime types are dynamic)
+                    chunk_any = cast(Any, chunk)
+                    choices = getattr(chunk_any, "choices", None)
+                    if choices:
+                        first = cast(Any, choices[0])
+                        delta = getattr(first, "delta", None)
+                        content = getattr(delta, "content", None) if delta is not None else None
+                        if content:
+                            yield content
         except Exception as e:
             raise LLMProviderError(f"OpenAI streaming failed: {e}") from e
