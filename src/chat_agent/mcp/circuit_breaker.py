@@ -26,7 +26,7 @@ class CircuitBreaker:
         self,
         failure_threshold: int = 5,
         success_threshold: int = 2,
-        timeout_seconds: int = 60,
+        timeout_seconds: float = 60.0,
         name: str = "CircuitBreaker",
     ):
         """
@@ -40,7 +40,7 @@ class CircuitBreaker:
         """
         self.failure_threshold = failure_threshold
         self.success_threshold = success_threshold
-        self.timeout_seconds = timeout_seconds
+        self.timeout_seconds = float(timeout_seconds)
         self.name = name
         
         self.failure_count = 0
@@ -136,6 +136,18 @@ class CircuitBreaker:
         self.last_failure_time = None
         logger.info(f"{self.name} manually reset")
     
+    @property
+    def is_open(self) -> bool:
+        return self.state == "open"
+
+    @property
+    def is_half_open(self) -> bool:
+        return self.state == "half_open"
+
+    @property
+    def is_closed(self) -> bool:
+        return self.state == "closed"
+
     def get_state(self) -> dict[str, Any]:
         """Get circuit breaker state."""
         return {
