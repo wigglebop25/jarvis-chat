@@ -5,6 +5,7 @@ Regex definitions for intent recognition and parameter extraction.
 """
 
 from ..models import IntentType
+from typing import Any
 
 INTENT_PATTERNS: dict[IntentType, list[str]] = {
     IntentType.DIRECTORY_LIST: [
@@ -29,6 +30,10 @@ INTENT_PATTERNS: dict[IntentType, list[str]] = {
         r"(what|which)\s*(network|wifi|wi-fi|internet).*(connect|connected|connecting|status)",
         r"how\s*(much|many)\s*(memory|ram|storage|space)",
         r"what('s|s| is)\s*(the|my)?\s*(cpu|memory|ram|storage)",
+        # New patterns for Task 2
+        r"(cpu|system)\s*temperature",
+        r"(uptime|how\s+long)\s*(is\s+the\s+system\s+)?running",
+        r"(process|processes|running)\s*(list|info)",
     ],
     IntentType.VOLUME_CONTROL: [
         r"(volume|sound)\s*(up|down|louder|quieter|higher|lower)",
@@ -40,6 +45,10 @@ INTENT_PATTERNS: dict[IntentType, list[str]] = {
         r"(set|change)\s*(the)?\s*volume\s*(to|at)?\s*(\d+)",
         r"make\s*it\s*(louder|quieter)",
         r"what\s*is\s*(my|the)\s*(current\s*)?(system\s*)?volume",
+        # New patterns for Task 2
+        r"(volume|sound)\s*(level|percentage|percent)?",
+        r"silent\s*mode",
+        r"(volume|sound)\s*control",
     ],
     IntentType.MUSIC_CONTROL: [
         r"(play|pause|stop)\s*(music|song|track|spotify)?",
@@ -48,6 +57,10 @@ INTENT_PATTERNS: dict[IntentType, list[str]] = {
         r"what('s|s| is)?\s*(music|song|track)?\s*(is\s*)?playing",
         r"current\s*(track|song)",
         r"resume\s*(music|playback|spotify)?",
+        # New patterns for Task 2
+        r"(shuffle|random)\s*(on|off|mode)?",
+        r"(repeat|loop)\s*(all|one|off)?",
+        r"(turn|toggle)\s*(on|off)\s*(shuffle|repeat)",
     ],
     IntentType.SPOTIFY_INFO: [
         r"show\s*(my|the)?\s*(spotify\s*)?queue",
@@ -59,18 +72,31 @@ INTENT_PATTERNS: dict[IntentType, list[str]] = {
         r"show\s+available\s+spotify\s+devices",
         r"show\s+tracks\s+in\s+(my\s+)?playlist",
         r"play\s+(my\s+)?playlist",
+        # New patterns for Task 2
+        r"show\s*(my)?\s*(spotify\s*)?(albums?|artist|artists)",
+        r"(get|show)\s*(spotify\s*)?recommendations?",
+        r"(show|list)\s*(spotify\s*)?(followers?|following)",
+        r"(find|search)\s+(artist|album|playlist)\s+(.*)",
     ],
     IntentType.NETWORK_TOGGLE: [
         r"(turn|toggle|switch)\s*(on|off)\s*(the)?\s*(wifi|wi-fi|bluetooth|ethernet)",
         r"(enable|disable)\s*(the)?\s*(wifi|wi-fi|bluetooth|ethernet)",
         r"(wifi|wi-fi|bluetooth|ethernet)\s*(on|off)",
         r"(connect|disconnect)\s*(to)?\s*(wifi|wi-fi|bluetooth|ethernet)",
+        # New patterns for Task 2
+        r"(ethernet|wired)\s*(status|connection)",
+        r"(airplane|flight)\s*mode",
+        r"network\s*(status|info|information)",
     ],
     IntentType.FILE_ORGANIZATION: [
         r"(organize|clean|sort|tidy)\s*(my|the)?\s*(downloads|desktop|documents|folder|files)",
         r"(organize|sort)\s*(files|folder)",
         r"(clean up|tidy)\s*(downloads|desktop|documents|folder)?",
         r"(arrange|group)\s*(files)\s*(by)?\s*(type|extension|date)",
+        # New patterns for Task 2
+        r"(archive|compress)\s*(files|folders?)?",
+        r"(backup|copy)\s*(files|folders?)",
+        r"(delete|remove)\s*(old|unused)\s*(files|folders?)",
     ],
     IntentType.PATH_RESOLVE: [
         r"where\s*(is|at)\s*(my|the)?\s*(downloads|documents|desktop|home|project)\s*(folder|directory)?",
@@ -79,10 +105,14 @@ INTENT_PATTERNS: dict[IntentType, list[str]] = {
     IntentType.BLUETOOTH_CONTROL: [
         r"(list|show|see|find)\s*(my)?\s*bluetooth\s*(devices?)?",
         r"(connect|disconnect)\s*(to|from)?\s*(the)?\s*(bluetooth\s*)?device",
+        # New patterns for Task 2
+        r"(pair|unpair)\s*(bluetooth\s*)?(device)?",
+        r"(pair|unpair)\s*(device|bluetooth)",
+        r"(list|show)\s*(bluetooth\s*)?(devices?|signal|rssi)",
     ],
 }
 
-PARAMETER_EXTRACTORS = {
+PARAMETER_EXTRACTORS: dict[IntentType, dict[str, Any]] = {
     IntentType.VOLUME_CONTROL: {
         "direction": [
             (r"\bunmute\b", "unmute"),
@@ -99,6 +129,8 @@ PARAMETER_EXTRACTORS = {
             (r"\b(next|skip)\b", "next"),
             (r"\bprevious\b", "previous"),
             (r"(what('s|s| is)?\s*(music|song|track)?\s*(is\s*)?playing|current\s*(track|song))", "current"),
+            (r"\b(shuffle|random)\b", "shuffle"),
+            (r"\b(repeat|loop)\b", "repeat"),
         ],
     },
     IntentType.NETWORK_TOGGLE: {

@@ -128,6 +128,12 @@ def map_intent_params_to_tool(intent: Intent) -> dict:
                 params["type"] = "playlist"
         else:
             params["type"] = "track"
+            # Extract track name from the command
+            # e.g., "play your guardian angel" -> "your guardian angel"
+            match = re.search(r"play\s+(?:the\s+)?(.*?)(?:\s+by\s+|$)", text)
+            if match:
+                track_name = match.group(1).strip()
+                params["trackName"] = track_name  # Store for queue search
 
     elif tool_name == "searchSpotify":
         match = re.search(r"(?:search|find)\s+(?:for\s+)?(?:the\s+)?(.*?)\s+on\s+spotify", text)
