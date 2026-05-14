@@ -13,7 +13,7 @@ async def test_mood_analysis(mood_analyzer: Any) -> dict:
     Returns:
         Dict with test results
     """
-    results = {
+    results: dict[str, Any] = {
         "extraction": False,
         "correlation": False,
         "confidence": 0.0,

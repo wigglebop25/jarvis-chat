@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ class RAGTestSuite:
             # Setup
             vector_store = get_vector_store()
             mood_analyzer = get_mood_analyzer()
-            embeddings = {}
+            embeddings: dict[str, Any] = {}
             
             # Run tests
             self.results["retrieval_quality"] = await test_retrieval_quality(

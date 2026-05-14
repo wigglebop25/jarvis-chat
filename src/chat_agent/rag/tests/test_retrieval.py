@@ -13,7 +13,7 @@ async def test_retrieval_quality(vector_store: Any, embeddings: dict[str, Any]) 
     Returns:
         Dict with test results
     """
-    results = {
+    results: dict[str, Any] = {
         "exact_match": False,
         "related_term": False,
         "irrelevant_filter": False,

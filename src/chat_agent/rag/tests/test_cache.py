@@ -14,7 +14,7 @@ async def test_ttl_eviction(vector_store: Any) -> dict:
     Returns:
         Dict with test results
     """
-    results = {
+    results: dict[str, Any] = {
         "expiration": False,
         "retention": False,
         "cleanup": False,
@@ -67,7 +67,7 @@ async def test_ttl_eviction(vector_store: Any) -> dict:
 
 async def test_cache_consistency(cache_store: Any) -> dict:
     """Test tool cache consistency and hit rates."""
-    results = {
+    results: dict[str, Any] = {
         "store": False,
         "retrieve": False,
         "hit_rate": 0.0,

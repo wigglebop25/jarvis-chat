@@ -14,7 +14,7 @@ async def test_latency_benchmarks(vector_store: Any, embeddings: dict[str, Any])
     Returns:
         Dict with latency measurements
     """
-    results = {
+    results: dict[str, Any] = {
         "embedding_latency_ms": 0.0,
         "search_latency_ms": 0.0,
         "cache_store_latency_ms": 0.0,

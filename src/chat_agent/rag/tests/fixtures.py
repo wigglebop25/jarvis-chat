@@ -31,7 +31,8 @@ class TestDataFixtures:
         """Create a test vector store with sample data."""
         from ..vector_store import get_vector_store
         
-        store = get_vector_store(":memory:")
+        # Use the singleton test vector store (no in-memory param supported)
+        store = get_vector_store()
         for pl_id, pl_name, description in TestDataFixtures.PLAYLISTS:
             try:
                 store.embed_and_cache(pl_id, "playlist", description, entity_name=pl_name, ttl_hours=24)
@@ -57,7 +58,7 @@ class LatencyBenchmark:
     
     def __init__(self, name: str):
         self.name = name
-        self.measurements = []
+        self.measurements: list[float] = []
     
     async def measure(self, func, *args, **kwargs) -> Any:
         """Measure function latency."""
