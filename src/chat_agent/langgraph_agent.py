@@ -22,7 +22,16 @@ class LangGraphChatAgent:
     but uses a state-based graph for orchestration.
     """
 
-    def __init__(self, config: Optional[AgentConfig] = None, llm_config: Optional[LLMConfig] = None):
+    def __init__(
+        self,
+        config: Optional[AgentConfig] = None,
+        llm_config: Optional[LLMConfig] = None,
+        llm_provider: Optional[Any] = None,
+        mcp_router: Optional[Any] = None,
+        rag_retriever: Optional[Any] = None,
+        response_cache: Optional[Any] = None,
+        context_cache: Optional[Any] = None,
+    ):
         self.config = config or AgentConfig()
         self.llm_config = llm_config or self.config.llm
         self.session_id = self.config.session_id
@@ -33,21 +42,29 @@ class LangGraphChatAgent:
         # Internal state for manual history tracking
         self.messages: list[Any] = [SystemMessage(content=self.config.system_prompt)]
         
-        self.llm_provider = None
-        try:
-            self.llm_provider = create_provider(self.llm_config.provider, **self.llm_config.get_provider_kwargs())
-        except Exception as e:
-            logger.warning(f"Could not initialize LLM provider: {e}. Using fallback mode.")
+        self.llm_provider = llm_provider
+        if self.llm_provider is None:
+            try:
+                self.llm_provider = create_provider(self.llm_config.provider, **self.llm_config.get_provider_kwargs())
+            except Exception as e:
+                logger.warning(f"Could not initialize LLM provider: {e}. Using fallback mode.")
 
-        if self.config.mcp.multi_endpoint_enabled:
-            self.mcp_router = MultiEndpointMCPRouter(
-                system_endpoint=self.config.mcp.system_url,
-                spotify_endpoint=self.config.mcp.spotify_url,
-            )
-        else:
-            from .mcp.client import MCPClient
-            mcp_client = MCPClient(base_url=self.config.mcp.url)
-            self.mcp_router = MCPRouter(mcp_client=mcp_client)
+        self.mcp_router = mcp_router
+        if self.mcp_router is None:
+            if self.config.mcp.multi_endpoint_enabled:
+                self.mcp_router = MultiEndpointMCPRouter(
+                    system_endpoint=self.config.mcp.system_url,
+                    spotify_endpoint=self.config.mcp.spotify_url,
+                    system_transport=self.config.mcp.system_transport,
+                    spotify_transport=self.config.mcp.spotify_transport,
+                )
+            else:
+                from .mcp.client import MCPClient
+                mcp_client = MCPClient(base_url=self.config.mcp.url)
+                self.mcp_router = MCPRouter(mcp_client=mcp_client)
+        
+        from .rag.retriever import get_rag_retriever
+        self.rag_retriever = rag_retriever or get_rag_retriever()
         
         from .skills import ToolErrorRepromptSkill
         self.tool_error_reprompt_skill = ToolErrorRepromptSkill(
@@ -55,8 +72,8 @@ class LangGraphChatAgent:
             base_backoff_seconds=self.config.tool_retry_backoff_seconds,
         )
         
-        self.response_cache = None
-        if self.config.llm_response_cache_enabled:
+        self.response_cache = response_cache
+        if self.response_cache is None and self.config.llm_response_cache_enabled:
             from .response_cache import LLMResponseCache
             from pathlib import Path
             path = Path(self.config.llm_response_cache_path).expanduser() if self.config.llm_response_cache_path else None
@@ -66,8 +83,8 @@ class LangGraphChatAgent:
                 min_chars=self.config.llm_response_cache_min_chars, persistence_path=path,
             )
         
-        self.context_cache = None
-        if self.config.context_cache_enabled and self.llm_provider:
+        self.context_cache = context_cache
+        if self.context_cache is None and self.config.context_cache_enabled and self.llm_provider:
             from .context_cache import SessionContextCache
             from pathlib import Path
             path = Path(self.config.context_cache_path).expanduser() if self.config.context_cache_path else None
@@ -79,7 +96,7 @@ class LangGraphChatAgent:
             )
 
         self._tool_definitions = get_tool_definitions()
-        self.last_usage = {}
+        self.last_usage: dict[str, Any] = {}
 
     async def process_transcript(self, transcript: str) -> str:
         if not transcript or not transcript.strip():
@@ -98,15 +115,26 @@ class LangGraphChatAgent:
             "execution_error": None,
             "last_tool_call_id": None,
             "fast_path_executed": None,
-            "usage": None
+            "usage": None,
+            "rag_context": None
         }
         
+        # Refresh tool definitions from MCP router (dynamic discovery)
+        if self.mcp_router:
+            try:
+                raw_tools = await self.mcp_router.list_tools()
+                from .tools.definitions import normalize_mcp_tool_definitions
+                self._tool_definitions = normalize_mcp_tool_definitions(raw_tools)
+            except Exception as e:
+                logger.warning(f"Dynamic tool discovery failed: {e}. Using cached definitions.")
+
         # Prepare config for nodes (passing dependencies and thread_id)
         config: RunnableConfig = {
             "configurable": {
                 "thread_id": self.session_id,
                 "llm_provider": self.llm_provider,
                 "mcp_router": self.mcp_router,
+                "rag_retriever": self.rag_retriever,
                 "reprompt_skill": self.tool_error_reprompt_skill,
                 "response_cache": self.response_cache,
                 "context_cache": self.context_cache,
@@ -151,6 +179,19 @@ class LangGraphChatAgent:
         if self.context_cache:
             self.context_cache.update_provider(self.llm_provider)
 
+    def get_available_models(self) -> list:
+        if self.llm_provider is None:
+            return []
+        return self.llm_provider.get_available_models()
+
+    def get_available_models_detailed(self) -> list[dict[str, Any]]:
+        """Fetch available models with detailed metadata."""
+        if self.llm_provider is None:
+            return []
+        if hasattr(self.llm_provider, "get_available_models_detailed"):
+            return self.llm_provider.get_available_models_detailed()
+        return [{"name": m, "input_token_limit": 0} for m in self.llm_provider.get_available_models()]
+
     def set_session_id(self, session_id: str) -> None:
         self.session_id = session_id.strip() if session_id else "default"
 
@@ -181,6 +222,22 @@ class LangGraphChatAgent:
         if self.context_cache:
             stats.update(self.context_cache.get_stats(self.session_id))
         return stats
+
+    def get_mcp_server_count(self) -> int:
+        """Get the number of configured MCP servers."""
+        # Count configured endpoints in MultiEndpointMCPRouter
+        if hasattr(self.mcp_router, 'mcp_client'):
+            # MultiEndpointMCPRouter has mcp_client with system_endpoint and spotify_endpoint
+            client = getattr(self.mcp_router, 'mcp_client', None)
+            count = 0
+            if client and getattr(client, 'system_endpoint', None):
+                count += 1
+            if client and getattr(client, 'spotify_endpoint', None):
+                count += 1
+            return count
+        
+        # Fallback for single-endpoint router
+        return 1
 
     def register_context_artifact(self, name: str, values: list[float], source_dtype: str = "fp32") -> dict:
         if not self.context_cache:

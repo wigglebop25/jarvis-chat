@@ -5,6 +5,7 @@ Main Chat Agent class that processes voice transcripts,
 recognizes intents, and routes to appropriate skills via MCP.
 """
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -39,6 +40,9 @@ class ChatAgent(LLMHandlerMixin, ToolHandlerMixin, CacheHandlerMixin):
         self.config = config or AgentConfig()
         self.llm_config = llm_config or self.config.llm
         self.session_id = self.config.session_id
+        
+        # Per-session locks to prevent concurrent request race conditions
+        self._session_locks: dict[str, asyncio.Lock] = {}
         
         if self.config.agent_type == "langgraph":
             from .langgraph_agent import LangGraphChatAgent
@@ -110,6 +114,12 @@ class ChatAgent(LLMHandlerMixin, ToolHandlerMixin, CacheHandlerMixin):
             return self.message_builder.get_tools_payload()
         return None
 
+    async def _get_or_create_session_lock(self, session_id: str) -> asyncio.Lock:
+        """Get or create a lock for the given session_id to prevent race conditions."""
+        if session_id not in self._session_locks:
+            self._session_locks[session_id] = asyncio.Lock()
+        return self._session_locks[session_id]
+
     async def process_transcript(self, transcript: str) -> str:
         if hasattr(self, "_delegate"):
             return await self._delegate.process_transcript(transcript)
@@ -117,33 +127,36 @@ class ChatAgent(LLMHandlerMixin, ToolHandlerMixin, CacheHandlerMixin):
         if not transcript or not transcript.strip():
             return "I didn't catch that. Could you please repeat?"
 
-        if self.config.log_transcripts:
-            logger.info(f"Processing transcript: {transcript}")
+        # Acquire session lock to serialize concurrent requests for the same session
+        session_lock = await self._get_or_create_session_lock(self.session_id)
+        async with session_lock:
+            if self.config.log_transcripts:
+                logger.info(f"Processing transcript: {transcript}")
 
-        self._record_message(MessageRole.USER, transcript)
-        route_result = await self.mcp_router.route_and_call(transcript)
+            self._record_message(MessageRole.USER, transcript)
+            route_result = await self.mcp_router.route_and_call(transcript)
 
-        intent_str = route_result.get("intent", "UNKNOWN").lower()
-        confidence = route_result.get("confidence", 0.0)
-        try:
-            intent_type = IntentType(intent_str)
-        except ValueError:
-            intent_type = IntentType.UNKNOWN
+            intent_str = route_result.get("intent", "UNKNOWN").lower()
+            confidence = route_result.get("confidence", 0.0)
+            try:
+                intent_type = IntentType(intent_str)
+            except ValueError:
+                intent_type = IntentType.UNKNOWN
 
-        intent = Intent(type=intent_type, confidence=confidence,
-                       parameters=route_result.get("arguments", {}), raw_text=transcript)
+            intent = Intent(type=intent_type, confidence=confidence,
+                           parameters=route_result.get("arguments", {}), raw_text=transcript)
 
-        if route_result.get("should_execute") and route_result.get("tool_name"):
-            tool_name = str(route_result.get("tool_name", "unknown"))
-            if "execution_error" in route_result:
-                error_msg = str(route_result["execution_error"])
-                self._record_message(MessageRole.TOOL, json.dumps({"is_error": True, "error": error_msg}),
-                                   tool_call_id=f"intent-{len(self.context.messages)}", name=tool_name)
-                response = format_tool_error(tool_name, error_msg)
-            else:
-                result_data = route_result.get("execution_result")
-                self._record_message(MessageRole.TOOL, json.dumps({"is_error": False, "result": result_data}),
-                                   tool_call_id=f"intent-{len(self.context.messages)}", name=tool_name)
+            if route_result.get("should_execute") and route_result.get("tool_name"):
+                tool_name = str(route_result.get("tool_name", "unknown"))
+                if "execution_error" in route_result:
+                    error_msg = str(route_result["execution_error"])
+                    self._record_message(MessageRole.TOOL, json.dumps({"is_error": True, "error": error_msg}),
+                                       tool_call_id=f"intent-{len(self.context.messages)}", name=tool_name)
+                    response = format_tool_error(tool_name, error_msg)
+                else:
+                    result_data = route_result.get("execution_result")
+                    self._record_message(MessageRole.TOOL, json.dumps({"is_error": False, "result": result_data}),
+                                       tool_call_id=f"intent-{len(self.context.messages)}", name=tool_name)
                 response = format_tool_result(tool_name, result_data)
 
             self._record_message(MessageRole.ASSISTANT, response)
@@ -194,6 +207,33 @@ class ChatAgent(LLMHandlerMixin, ToolHandlerMixin, CacheHandlerMixin):
         if self.context_cache:
             self.context_cache.update_provider(self.llm_provider)
 
+    @property
+    def llm_provider(self) -> Any:
+        """Expose the active LLM provider, delegating if necessary."""
+        if hasattr(self, "_delegate"):
+            return self._delegate.llm_provider
+        return self._llm_provider
+
+    @llm_provider.setter
+    def llm_provider(self, value: Any) -> None:
+        if hasattr(self, "_delegate"):
+            self._delegate.llm_provider = value
+        else:
+            self._llm_provider = value
+
+    def get_available_models(self) -> list:
+        if hasattr(self, "_delegate"):
+            return self._delegate.get_available_models()
+        return self.llm_provider.get_available_models()
+
+    def get_available_models_detailed(self) -> list[dict[str, Any]]:
+        """Fetch available models with detailed metadata."""
+        if hasattr(self, "_delegate"):
+            return self._delegate.get_available_models_detailed()
+        if hasattr(self.llm_provider, "get_available_models_detailed"):
+            return self.llm_provider.get_available_models_detailed()
+        return [{"name": m, "input_token_limit": 0} for m in self.llm_provider.get_available_models()]
+
     def set_session_id(self, session_id: str) -> None:
         if hasattr(self, "_delegate"):
             return self._delegate.set_session_id(session_id)
@@ -210,6 +250,25 @@ class ChatAgent(LLMHandlerMixin, ToolHandlerMixin, CacheHandlerMixin):
         stats: dict[str, Any] = self.context_cache.get_stats(self.session_id) if self.context_cache else {"enabled": False}
         stats["response_cache"] = self.response_cache.get_stats() if self.response_cache else {"enabled": False}
         return stats
+
+    def get_mcp_server_count(self) -> int:
+        """Get the number of configured MCP servers."""
+        if hasattr(self, "_delegate"):
+            return self._delegate.get_mcp_server_count()
+        
+        # Count configured endpoints in MultiEndpointMCPRouter
+        if hasattr(self.mcp_router, 'mcp_client'):
+            # MultiEndpointMCPRouter has mcp_client with system_endpoint and spotify_endpoint
+            client = getattr(self.mcp_router, 'mcp_client', None)
+            count = 0
+            if client and getattr(client, 'system_endpoint', None):
+                count += 1
+            if client and getattr(client, 'spotify_endpoint', None):
+                count += 1
+            return count
+        
+        # Fallback for single-endpoint router
+        return 1
 
     def register_context_artifact(self, name: str, values: list[float], source_dtype: str = "fp32") -> dict:
         if hasattr(self, "_delegate"):

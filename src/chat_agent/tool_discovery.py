@@ -5,6 +5,7 @@ Handles dynamic loading of tool definitions from MCP server
 with fallback to bundled schemas.
 """
 
+import asyncio
 import logging
 from typing import Any, Optional
 
@@ -16,6 +17,9 @@ logger = logging.getLogger(__name__)
 
 class ToolDiscovery:
     """Manages dynamic tool definition discovery from MCP server."""
+    
+    # Class variable for refresh lock to prevent concurrent requests
+    _refresh_lock: asyncio.Lock | None = None
     
     def __init__(self, mcp_router: MCPRouterLike, bundled_tools: list[dict[str, Any]]):
         """
@@ -30,6 +34,13 @@ class ToolDiscovery:
         self.current_tools = bundled_tools.copy()
         self._loaded = False
         self._error: str | None = None
+    
+    @classmethod
+    def _get_refresh_lock(cls) -> asyncio.Lock:
+        """Get or create the refresh lock."""
+        if cls._refresh_lock is None:
+            cls._refresh_lock = asyncio.Lock()
+        return cls._refresh_lock
     
     @property
     def tools(self) -> list[dict[str, Any]]:
@@ -50,6 +61,8 @@ class ToolDiscovery:
         """
         Refresh tool definitions asynchronously from MCP server.
         
+        Acquires lock to prevent concurrent refresh requests.
+        
         Args:
             supports_tools: Whether the provider supports tools
         
@@ -62,34 +75,43 @@ class ToolDiscovery:
         if self._loaded:
             return False
         
-        try:
-            discovered_tools = await self.mcp_router.list_tools()
-            normalized_tools = normalize_mcp_tool_definitions(discovered_tools)
+        lock = self._get_refresh_lock()
+        async with lock:
+            logger.debug("Acquiring tool refresh lock")
             
-            if not normalized_tools:
-                raise RuntimeError("MCP tools/list returned no valid tool definitions")
+            # Check again after acquiring lock (another coroutine may have completed the refresh)
+            if self._loaded:
+                logger.debug("Tool refresh already completed by another coroutine")
+                return False
             
-            tool_defs_changed = normalized_tools != self.current_tools
-            self.current_tools = normalized_tools
-            self._loaded = True
-            self._error = None
-            
-            logger.info(
-                "Loaded %s tool definitions from Rust MCP server.",
-                len(normalized_tools),
-            )
-            
-            return tool_defs_changed
-        
-        except Exception as exc:
-            error_text = str(exc)
-            if error_text != self._error:
-                logger.warning(
-                    "MCP tool discovery failed, using bundled schemas: %s",
-                    error_text,
+            try:
+                discovered_tools = await self.mcp_router.list_tools()
+                normalized_tools = normalize_mcp_tool_definitions(discovered_tools)
+                
+                if not normalized_tools:
+                    raise RuntimeError("MCP tools/list returned no valid tool definitions")
+                
+                tool_defs_changed = normalized_tools != self.current_tools
+                self.current_tools = normalized_tools
+                self._loaded = True
+                self._error = None
+                
+                logger.info(
+                    "Loaded %s tool definitions from Rust MCP server.",
+                    len(normalized_tools),
                 )
-            self._error = error_text
-            return False
+                
+                return tool_defs_changed
+            
+            except Exception as exc:
+                error_text = str(exc)
+                if error_text != self._error:
+                    logger.warning(
+                        "MCP tool discovery failed, using bundled schemas: %s",
+                        error_text,
+                    )
+                self._error = error_text
+                return False
     
     def refresh_sync(self, supports_tools: bool = True) -> bool:
         """
