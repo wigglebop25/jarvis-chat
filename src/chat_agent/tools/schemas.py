@@ -1,6 +1,6 @@
 """Convert tool schemas between different LLM provider formats."""
 
-from typing import Any
+from typing import Any, Tuple, Optional
 
 
 class ToolSchemaConverter:
@@ -113,3 +113,49 @@ class ToolSchemaConverter:
             converted["items"] = ToolSchemaConverter._convert_property(prop_def["items"])
 
         return converted
+
+
+# Runtime validation helpers
+def to_jsonschema(tool: dict[str, Any]) -> dict[str, Any]:
+    """Return the tool's JSON Schema if available, otherwise a permissive schema."""
+    # Prefer explicit 'parameters' or 'inputSchema' keys
+    schema = tool.get("parameters") or tool.get("inputSchema")
+    if isinstance(schema, dict):
+        return schema
+    # Fallback
+    return {"type": "object", "additionalProperties": True}
+
+
+def validate_tool_params(tool: dict[str, Any], params: dict[str, Any]) -> Tuple[bool, Optional[str]]:
+    """Validate params against the tool's JSON Schema.
+
+    Uses the 'jsonschema' package when available. If not present, performs a
+    lightweight required-field check. Returns (is_valid, error_message).
+    """
+    schema = to_jsonschema(tool)
+
+    try:
+        import jsonschema  # type: ignore
+        from jsonschema.exceptions import ValidationError
+
+        try:
+            jsonschema.validate(instance=params or {}, schema=schema)
+            return True, None
+        except ValidationError as ve:
+            return False, str(ve)
+    except Exception:
+        # Minimal fallback: check required keys
+        required = schema.get("required") if isinstance(schema, dict) else None
+        if not required:
+            return True, None
+        missing = [k for k in required if k not in (params or {})]
+        if missing:
+            return False, f"Missing required parameters: {missing}"
+        return True, None
+
+
+def assert_valid_tool_call(tool: dict[str, Any], params: dict[str, Any]) -> None:
+    """Raise ValueError if params are invalid for the given tool."""
+    ok, err = validate_tool_params(tool, params)
+    if not ok:
+        raise ValueError(f"Tool params validation failed for {tool.get('name')}: {err}")
