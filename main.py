@@ -35,11 +35,18 @@ def get_git_info():
         pass
     return ""
 
-def print_banner():
+def print_banner(agent=None):
     import shutil
     cols = shutil.get_terminal_size().columns
     if cols > 100:
         cols = 100
+    
+    mcp_count = 1
+    if agent:
+        try:
+            mcp_count = agent.get_mcp_server_count()
+        except Exception:
+            mcp_count = 1
     
     banner = f"""╭{'─'*(cols-2)}╮
 │  ╭─╮╭─╮{' '*(cols-11)}│
@@ -50,7 +57,7 @@ def print_banner():
 │  JARVIS uses AI. Check for mistakes.{' '*(cols-40)}│
 ╰{'─'*(cols-2)}╯
 
-● Environment loaded: 1 provider, MCP servers active
+● Environment loaded: 1 provider, {mcp_count} MCP servers active
 ● JARVIS Skills Server: Connected
 """
     console.print(banner)
@@ -110,9 +117,10 @@ def show_help():
     help_text = """
  [bold cyan]? /help[/]       show full help                      [bold magenta]ctrl+a[/]    go to line start
  [bold cyan]/[/]           commands                            [bold magenta]ctrl+e[/]    go to line end
- [bold cyan]/model[/]      choose AI model                     [bold magenta]ctrl+u[/]    delete from cursor to beginning of line
- [bold cyan]/theme[/]      switch themes                       [bold magenta]ctrl+k[/]    delete from cursor to end of line
- [bold cyan]clear[/]       clear conversation                  [bold magenta]ctrl+c[/]    cancel / exit
+ [bold cyan]/model[/]      choose AI model (selector)           [bold magenta]ctrl+u[/]    delete to beginning
+ [bold cyan]/models[/]     list all models (with details)       [bold magenta]ctrl+k[/]    delete to end
+ [bold cyan]/theme[/]      switch themes                       [bold magenta]ctrl+c[/]    cancel / exit
+ [bold cyan]clear[/]       clear conversation
 """
     console.print(Panel(help_text, title="JARVIS Help", border_style="cyan"))
 
@@ -121,25 +129,52 @@ def is_core_model(m):
     m_lower = m.lower()
     if "tts" in m_lower or "vision" in m_lower or "image" in m_lower or "robotics" in m_lower:
         return False
-    if "banana" in m_lower or "lyria" in m_lower or "deep-research" in m_lower:
+    if "banana" in m_lower or "lyria" in m_lower: # Keep deep-research if user wants it
         return False
     if "embedding" in m_lower or "bison" in m_lower or "learnlm" in m_lower:
         return False
+    # Allow all Gemini 2.x, 3.x, and Gemma 4
+    if any(x in m_lower for x in ["gemini-1.5", "gemini-2.", "gemini-3.", "gemma-4", "gpt-4", "gpt-o"]):
+        return True
     if "preview" in m_lower and not ("pro" in m_lower or "flash" in m_lower):
         return False
     return True
+
+def format_tokens(n):
+    if n >= 1000000:
+        return f"{n/1000000:.1f}M"
+    if n >= 1000:
+        return f"{n/1000:.0f}K"
+    return str(n)
+
+def list_all_models(agent):
+    console.print("\n [bold white]Available AI Models (Detailed List):[/]\n")
+    
+    try:
+        detailed_models = agent.get_available_models_detailed()
+        
+        for m in detailed_models:
+            name = m.get("name", "N/A")
+            tokens = m.get("input_token_limit", 0)
+            token_str = format_tokens(tokens)
+            
+            is_active = name == agent.llm_config.model
+            star = "[bold yellow]*[/] " if is_active else "  "
+            
+            console.print(f"{star}[bold cyan]{name:<35}[/] [dim]Context:[/] [green]{token_str:>6}[/]")
+            
+        console.print("\n [dim]Use [bold cyan]/model <name>[/] to switch directly or [bold cyan]/model[/] for the selector.[/]\n")
+        
+    except Exception as e:
+        console.print(f"[bold red]Error fetching models:[/] {e}")
 
 def handle_model_switch(agent):
     from chat_agent.llm import create_provider
     
     KNOWN_COSTS = {
-        "gemini-1.5-flash": "0.1x",
-        "gemini-1.5-pro": "1.0x",
-        "gemini-2.0-flash": "0.1x",
-        "gemini-2.0-pro": "1.0x",
-        "gemini-2.5-flash": "0.1x",
-        "gemini-2.5-pro": "1.0x",
-        "gemini-3": "Preview",
+        "flash": "0.1x",
+        "pro": "1.0x",
+        "lite": "0.05x",
         "gpt-4o-mini": "0.1x",
         "gpt-4o": "1.0x",
         "o1": "10x",
@@ -149,10 +184,11 @@ def handle_model_switch(agent):
     def get_cost_str(m, p):
         if p == "ollama":
             return "Free (Local)"
-        if "gemma" in m.lower() or "llama" in m.lower():
+        m_lower = m.lower()
+        if "gemma" in m_lower or "llama" in m_lower:
             return "via API Key"
         for k, v in KNOWN_COSTS.items():
-            if k in m.lower():
+            if k in m_lower:
                 return v
         return "1x"
     
@@ -160,41 +196,49 @@ def handle_model_switch(agent):
     raw_choices = []
     
     try:
-        current_models = agent.llm_provider.get_available_models()
-        raw_choices.extend([(m, agent.llm_config.provider) for m in current_models if is_core_model(m)])
+        current_models = agent.get_available_models_detailed()
+        raw_choices.extend([(m["name"], agent.llm_config.provider, m.get("input_token_limit", 0)) for m in current_models if is_core_model(m["name"])])
     except Exception:
-        raw_choices.append((agent.llm_config.model, agent.llm_config.provider))
+        raw_choices.append((agent.llm_config.model, agent.llm_config.provider, 0))
         
     for p in ["gemini", "openai", "ollama"]:
         if p != agent.llm_config.provider:
             try:
                 temp_p = create_provider(p)
                 if temp_p.is_configured():
-                    other_models = temp_p.get_available_models()
-                    raw_choices.extend([(m, p) for m in other_models if is_core_model(m)])
+                    if hasattr(temp_p, "get_available_models_detailed"):
+                        other_models = temp_p.get_available_models_detailed()
+                        raw_choices.extend([(m["name"], p, m.get("input_token_limit", 0)) for m in other_models if is_core_model(m["name"])])
+                    else:
+                        other_models = temp_p.get_available_models()
+                        raw_choices.extend([(m, p, 0) for m in other_models if is_core_model(m)])
             except Exception:
                 pass
                 
     seen = set()
     unique_choices = []
     
-    # Sort: put current model first, then others
+    # Sort: put current model first, then others by name
     raw_choices.sort(key=lambda x: (x[0] != agent.llm_config.model, x[1], x[0]))
 
     console.print("\nChoose the AI model to use for JARVIS.\n", style="bold")
     
-    for m, p in raw_choices:
+    for m, p, t in raw_choices:
         if (m, p) not in seen:
             seen.add((m, p))
             cost = get_cost_str(m, p)
+            token_str = format_tokens(t) if t > 0 else "N/A"
+            
             # Format nicely
             display_name = f"{m} ({p})"
             if m == agent.llm_config.model:
-                display_name += " (default)"
+                display_name = f"[bold yellow]* {display_name}[/]"
+            else:
+                display_name = f"  {display_name}"
             
             # Align right
-            padding = max(1, 50 - len(display_name))
-            title = f"{display_name}{' ' * padding}{cost}"
+            padding = max(1, 55 - len(display_name))
+            title = f"{display_name}{' ' * padding}[dim]Context:[/] [green]{token_str:>6}[/] [dim]•[/] [bold]{cost:>5}[/]"
             unique_choices.append(questionary.Choice(title=title, value=(m, p)))
     
     from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
@@ -253,7 +297,7 @@ def main():
         transcript = " ".join(args.command)
         process_transcript(agent, transcript)
     else:
-        print_banner()
+        print_banner(agent)
         
         while True:
             try:
@@ -275,6 +319,10 @@ def main():
 
                 if transcript.lower() == "/help":
                     show_help()
+                    continue
+
+                if transcript.lower() == "/models":
+                    list_all_models(agent)
                     continue
 
                 if transcript.lower().startswith("/theme"):
@@ -423,6 +471,8 @@ def process_transcript(agent: ChatAgent, transcript: str):
             u = agent.last_usage
             if u.get("cache_hit"):
                 console.print(Text("Answered from local cache (0 tokens)", style="dim italic"))
+            elif u.get("prompt_tokens") == 0 and u.get("completion_tokens") == 0:
+                console.print(Text("Executed via Fast Path (0 tokens)", style="dim italic"))
             else:
                 prompt_tokens = u.get("prompt_tokens", 0)
                 comp_tokens = u.get("completion_tokens", 0)
