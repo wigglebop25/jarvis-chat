@@ -42,7 +42,7 @@ def format_tokens(n: int) -> str:
 
 def _cost_str(model: str, provider: str) -> str:
     if provider == "ollama":
-        return "Free (Local)"
+        return "Local"
     ml = model.lower()
     if "gemma" in ml or "llama" in ml:
         return "via API Key"
@@ -66,14 +66,29 @@ def _make_esc_binding(q):
 
 
 def list_all_models(agent) -> None:
-    """Print all available models with token limits."""
+    """Print all available models with token limits and cost info."""
     console.print("\n [bold white]Available AI Models (Detailed List):[/]\n")
     try:
-        for m in agent.get_available_models_detailed():
+        models = agent.get_available_models_detailed()
+        provider = agent.llm_config.provider
+        
+        for m in models:
             name = m.get("name", "N/A")
             token_str = format_tokens(m.get("input_token_limit", 0))
-            star = "[bold yellow]*[/] " if name == agent.llm_config.model else "  "
-            console.print(f"{star}[bold cyan]{name:<35}[/] [dim]Context:[/] [green]{token_str:>6}[/]")
+            cost = _cost_str(name, provider)
+            
+            # Highlight active model
+            if name == agent.llm_config.model:
+                star = "[bold yellow]*[/] "
+                name_style = "bold cyan"
+            else:
+                star = "  "
+                name_style = "cyan"
+                
+            display_name = f"{name} ({provider})"
+            label = f"{star}[{name_style}]{display_name:<45}[/]"
+            console.print(f"{label} [dim]Context:[/] [green]{token_str:>6}[/] [dim]•[/] [bold]{cost:>5}[/]")
+            
         console.print("\n [dim]Use [bold cyan]/model <name>[/] to switch directly or [bold cyan]/model[/] for the selector.[/]\n")
     except Exception as e:
         console.print(f"[bold red]Error fetching models:[/] {e}")
