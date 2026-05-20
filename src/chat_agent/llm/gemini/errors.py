@@ -1,6 +1,7 @@
 """Gemini-specific exceptions."""
 
 from ..base import LLMProviderError, LLMConfigurationError
+from ...tools.retry_utils import RateLimitError
 
 
 class GeminiError(LLMProviderError):
@@ -19,7 +20,7 @@ class GeminiTimeoutError(GeminiError):
     """Raised when Gemini API request times out."""
 
 
-class GeminiRateLimitError(GeminiError):
+class GeminiRateLimitError(GeminiError, RateLimitError):
     """Raised when rate limited by Gemini API."""
 
 
