@@ -1,10 +1,14 @@
+import asyncio
 import json
+import logging
 import os
 from typing import Any, AsyncGenerator, Optional, cast
 
 from openai import AsyncOpenAI, OpenAI
 
 from .base import LLMProvider, LLMConfigurationError, LLMProviderError, LLMResponse, ToolCall
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAIProvider(LLMProvider):
@@ -109,56 +113,76 @@ class OpenAIProvider(LLMProvider):
         messages: list[dict[str, str]],
         tools: Optional[list[dict[str, Any]]] = None,
     ) -> LLMResponse:
-        """Generate asynchronous completion using OpenAI."""
-        try:
-            kwargs: dict[str, Any] = {
-                "model": self.model,
-                "messages": messages,
-                "temperature": self.temperature,
-                "max_tokens": self.max_tokens,
-            }
+        """Generate asynchronous completion using OpenAI with rate limit retries."""
+        from ..tools.retry_utils import async_retry_with_backoff, RateLimitError, RetryExceededError
+        
+        async def _make_request():
+            try:
+                kwargs: dict[str, Any] = {
+                    "model": self.model,
+                    "messages": messages,
+                    "temperature": self.temperature,
+                    "max_tokens": self.max_tokens,
+                }
 
-            if tools:
-                kwargs["tools"] = [
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": tool.get("name"),
-                            "description": tool.get("description", ""),
-                            "parameters": tool.get("parameters", {}),
-                        },
-                    }
-                    for tool in tools
-                ]
+                if tools:
+                    kwargs["tools"] = [
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": tool.get("name"),
+                                "description": tool.get("description", ""),
+                                "parameters": tool.get("parameters", {}),
+                            },
+                        }
+                        for tool in tools
+                    ]
 
-            response = await self.async_client.chat.completions.create(**kwargs)
+                response = await self.async_client.chat.completions.create(**kwargs)
 
-            tool_calls = []
-            for tool_call in response.choices[0].message.tool_calls or []:
-                if tool_call.type == "function":
-                    try:
-                        args = json.loads(tool_call.function.arguments)
-                    except json.JSONDecodeError:
-                        args = {}
-                    tool_calls.append(
-                        ToolCall(
-                            id=tool_call.id,
-                            name=tool_call.function.name,
-                            arguments=args,
+                tool_calls = []
+                for tool_call in response.choices[0].message.tool_calls or []:
+                    if tool_call.type == "function":
+                        try:
+                            args = json.loads(tool_call.function.arguments)
+                        except json.JSONDecodeError:
+                            args = {}
+                        tool_calls.append(
+                            ToolCall(
+                                id=tool_call.id,
+                                name=tool_call.function.name,
+                                arguments=args,
+                            )
                         )
-                    )
 
-            return LLMResponse(
-                text=response.choices[0].message.content or "",
-                tool_calls=tool_calls,
-                model=response.model,
-                usage={
-                    "prompt_tokens": response.usage.prompt_tokens,
-                    "completion_tokens": response.usage.completion_tokens,
-                },
+                return LLMResponse(
+                    text=response.choices[0].message.content or "",
+                    tool_calls=tool_calls,
+                    model=response.model,
+                    usage={
+                        "prompt_tokens": response.usage.prompt_tokens,
+                        "completion_tokens": response.usage.completion_tokens,
+                    },
+                )
+            except Exception as e:
+                # Check for rate limit (429)
+                error_msg = str(e)
+                if hasattr(e, "status_code") and e.status_code == 429: # type: ignore
+                    raise RateLimitError(f"OpenAI rate limit exceeded: {e}") from e
+                elif "429" in error_msg or "rate_limit" in error_msg.lower():
+                    raise RateLimitError(f"OpenAI rate limit exceeded: {e}") from e
+                
+                raise
+
+        try:
+            return await async_retry_with_backoff(
+                _make_request,
+                max_retries=3,
+                base_delay=1.0,
+                retryable_exceptions=(RateLimitError, asyncio.TimeoutError)
             )
-        except Exception as e:
-            raise LLMProviderError(f"OpenAI request failed: {e}") from e
+        except RetryExceededError as e:
+            raise LLMProviderError(f"OpenAI request failed after retries: {e}") from e
 
     async def stream(
         self,
