@@ -1,11 +1,12 @@
 """Lazy-loaded embedding model using Sentence-Transformers."""
 
 import logging
-from typing import Optional
+from importlib import import_module
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-_model = None
+_model: Any = None
 _model_name = "all-MiniLM-L6-v2"
 
 
@@ -15,9 +16,9 @@ def get_embedding_model():
     if _model is None:
         logger.info(f"Loading embedding model: {_model_name}")
         try:
-            from sentence_transformers import SentenceTransformer
-            _model = SentenceTransformer(_model_name)
-            logger.info(f"Embedding model loaded successfully (dimension: {_model.get_sentence_embedding_dimension()})")
+            sentence_transformers = import_module("sentence_transformers")
+            _model = sentence_transformers.SentenceTransformer(_model_name)
+            logger.info(f"Embedding model loaded successfully (dimension: {_model.get_embedding_dimension()})")
         except ImportError:
             logger.error("sentence-transformers not installed. Install with: uv pip install sentence-transformers")
             raise
@@ -70,4 +71,4 @@ def get_embedding_dimension() -> int:
     # Explicitly check/assert to satisfy return type requirements
     if model is None:
         return 384 # Default for MiniLM
-    return int(model.get_sentence_embedding_dimension())
+    return int(model.get_embedding_dimension())
