@@ -4,7 +4,7 @@ from typing import Any, Optional
 
 _PLAYLIST_NAME_CLEANERS = ("music", "in the", "in", "the", "playlist")
 _PLAYLIST_LINE_RE = re.compile(
-    r'^\s*\d+\.\s+"(?P<name>.*?)"\s+\((?P<tracks>\d+)\s+tracks\)\s+-\s+ID:\s+(?P<id>[A-Za-z0-9]+)',
+    r'^\s*\d+\.\s+"?(?P<name>.*?)"?\s*(?:\((?P<tracks>\d+)\s+tracks\))?\s*-\s*ID:\s*(?P<id>[A-Za-z0-9]+)',
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -56,6 +56,23 @@ def _normalize_playlist_text(value: str) -> str:
     return value.strip()
 
 
+def _extract_mcp_text(payload: Any) -> str:
+    if isinstance(payload, str):
+        return payload
+    if not isinstance(payload, dict):
+        return ""
+    content = payload.get("content")
+    if not isinstance(content, list):
+        return ""
+    lines: list[str] = []
+    for item in content:
+        if isinstance(item, dict):
+            text = item.get("text")
+            if isinstance(text, str) and text.strip():
+                lines.append(text)
+    return "\n".join(lines)
+
+
 async def resolve_playlist_match(mcp_router: Any, playlist_name: str) -> Optional[dict[str, Any]]:
     result = await mcp_router.execute_tool("getMyPlaylists", limit=50)
     if result.is_error:
@@ -65,14 +82,25 @@ async def resolve_playlist_match(mcp_router: Any, playlist_name: str) -> Optiona
     playlists: list[dict[str, Any]] = []
     if isinstance(payload, dict):
         playlists = payload.get("playlists") or []
+        if not playlists:
+            payload_text = _extract_mcp_text(payload)
+            if payload_text:
+                playlists = [
+                    {
+                        "name": match.group("name").strip(),
+                        "id": match.group("id").strip(),
+                        "tracks": {"total": int(match.group("tracks") or 0)},
+                    }
+                    for match in _PLAYLIST_LINE_RE.finditer(payload_text)
+                ]
     elif isinstance(payload, list):
         playlists = payload
     elif isinstance(payload, str):
         playlists = [
             {
-                "name": match.group("name"),
-                "id": match.group("id"),
-                "tracks": {"total": int(match.group("tracks"))},
+                "name": match.group("name").strip(),
+                "id": match.group("id").strip(),
+                "tracks": {"total": int(match.group("tracks") or 0)},
             }
             for match in _PLAYLIST_LINE_RE.finditer(payload)
         ]

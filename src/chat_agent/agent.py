@@ -22,6 +22,8 @@ from .tools.definitions import get_tool_definitions
 from .tools.formatter import format_tool_result, format_tool_error
 from .message_builder import MessageBuilder
 from .tool_discovery import ToolDiscovery
+from .tools.discovery_warmer import ToolDiscoveryWarmer
+from .agent_logic.session_cleanup import SessionCleanupManager
 from .agent_logic.mixins import LLMHandlerMixin, ToolHandlerMixin, CacheHandlerMixin
 
 logger = logging.getLogger(__name__)
@@ -36,6 +38,9 @@ class ChatAgent(LLMHandlerMixin, ToolHandlerMixin, CacheHandlerMixin):
     Can operate in legacy mode (imperative) or langgraph mode (graph-based).
     """
 
+    # Shared cleanup manager for all agent instances
+    _cleanup_manager: Optional[SessionCleanupManager] = None
+
     def __init__(self, config: Optional[AgentConfig] = None, llm_config: Optional[LLMConfig] = None):
         self.config = config or AgentConfig()
         self.llm_config = llm_config or self.config.llm
@@ -49,55 +54,69 @@ class ChatAgent(LLMHandlerMixin, ToolHandlerMixin, CacheHandlerMixin):
             self._delegate = LangGraphChatAgent(self.config, llm_config)
             return
 
-        self.context = ConversationContext()
+        self._init_components()
 
+    def _init_components(self) -> None:
+        """Build and wire all internal components. Called once from __init__."""
+        self.context = ConversationContext()
         self.llm_provider = None
         try:
             self.llm_provider = create_provider(self.llm_config.provider, **self.llm_config.get_provider_kwargs())
         except Exception as e:
             logger.warning(f"Could not initialize LLM provider: {e}. Using fallback mode.")
 
-        # Initialize multi-endpoint MCP router
+        # MCP router — multi-endpoint or single-endpoint
         if self.config.mcp.multi_endpoint_enabled:
             self.mcp_router = MultiEndpointMCPRouter(
                 system_endpoint=self.config.mcp.system_url,
                 spotify_endpoint=self.config.mcp.spotify_url,
             )
         else:
-            # Fallback to single-endpoint router for backward compatibility
             from .mcp import MCPRouter
             from .mcp.client import MCPClient
-            mcp_client = MCPClient(base_url=self.config.mcp.url)
-            self.mcp_router = MCPRouter(mcp_client=mcp_client)
-        
+            self.mcp_router = MCPRouter(mcp_client=MCPClient(base_url=self.config.mcp.url))
+
         self.tool_error_reprompt_skill = ToolErrorRepromptSkill(
             max_retries=self.config.tool_retry_attempts,
             base_backoff_seconds=self.config.tool_retry_backoff_seconds,
         )
 
+        # Context cache (conversation compression)
         self.context_cache = None
         if self.config.context_cache_enabled and self.llm_provider:
             path = Path(self.config.context_cache_path).expanduser() if self.config.context_cache_path else None
             self.context_cache = SessionContextCache(
                 llm_provider=self.llm_provider,
-                requested_dtype=self.config.context_dtype, max_turns=self.config.context_cache_max_turns,
+                requested_dtype=self.config.context_dtype,
+                max_turns=self.config.context_cache_max_turns,
                 summary_keep_last=self.config.context_cache_summary_keep_last,
-                token_budget=self.config.context_token_budget, persistence_path=path,
+                token_budget=self.config.context_token_budget,
+                persistence_path=path,
             )
 
+        # Response cache (LLM reply deduplication)
         self.response_cache = None
         if self.config.llm_response_cache_enabled:
             path = Path(self.config.llm_response_cache_path).expanduser() if self.config.llm_response_cache_path else None
             self.response_cache = LLMResponseCache(
                 ttl_seconds=self.config.llm_response_cache_ttl_seconds,
                 max_entries=self.config.llm_response_cache_max_entries,
-                min_chars=self.config.llm_response_cache_min_chars, persistence_path=path,
+                min_chars=self.config.llm_response_cache_min_chars,
+                persistence_path=path,
             )
 
         self.context.add_message(MessageRole.SYSTEM, self.config.system_prompt)
         self._tool_definitions = get_tool_definitions()
         self.message_builder = MessageBuilder(self.context, self._tool_definitions)
         self.tool_discovery = ToolDiscovery(self.mcp_router, self._tool_definitions)
+
+        # Background tasks: session cleanup + tool discovery warm-up
+        if ChatAgent._cleanup_manager is None:
+            ChatAgent._cleanup_manager = SessionCleanupManager(ttl_seconds=86400)
+            asyncio.create_task(ChatAgent._cleanup_manager.start_background_cleanup())
+        self._discovery_warmer = ToolDiscoveryWarmer(self.mcp_router)
+        asyncio.create_task(self._discovery_warmer.preheat())
+
 
     def _record_message(self, role: MessageRole, content: str, **kwargs) -> None:
         self.message_builder.record_message(role, content, **kwargs)
@@ -126,6 +145,11 @@ class ChatAgent(LLMHandlerMixin, ToolHandlerMixin, CacheHandlerMixin):
 
         if not transcript or not transcript.strip():
             return "I didn't catch that. Could you please repeat?"
+
+        # Phase 1: Register/Touch session
+        if self._cleanup_manager:
+            await self._cleanup_manager.register_session(self.session_id)
+            await self._cleanup_manager.touch_session(self.session_id)
 
         # Acquire session lock to serialize concurrent requests for the same session
         session_lock = await self._get_or_create_session_lock(self.session_id)
@@ -172,7 +196,7 @@ class ChatAgent(LLMHandlerMixin, ToolHandlerMixin, CacheHandlerMixin):
                     return await self._handle_with_llm(transcript, intent=intent)
             except Exception as e:
                 logger.warning(f"LLM failure: {e}, using fallback")
-                response = "I don't understand." if intent.type == IntentType.UNKNOWN else f"Recognized: {intent.type.value}"
+                response = self.config.fallback_message if intent.type == IntentType.UNKNOWN else f"Recognized: {intent.type.value}"
                 self._record_message(MessageRole.ASSISTANT, response)
                 return response
 
@@ -196,14 +220,10 @@ class ChatAgent(LLMHandlerMixin, ToolHandlerMixin, CacheHandlerMixin):
         if provider_name:
             self.llm_config.provider = provider_name
         self.llm_config.model = model_name
-
         new_provider = create_provider(self.llm_config.provider, **self.llm_config.get_provider_kwargs())
-        
         if not new_provider.is_configured():
             raise ValueError(f"Provider {self.llm_config.provider} is not properly configured (check API keys).")
-            
         self.llm_provider = new_provider
-        
         if self.context_cache:
             self.context_cache.update_provider(self.llm_provider)
 
@@ -252,22 +272,15 @@ class ChatAgent(LLMHandlerMixin, ToolHandlerMixin, CacheHandlerMixin):
         return stats
 
     def get_mcp_server_count(self) -> int:
-        """Get the number of configured MCP servers."""
+        """Return the number of configured MCP endpoints."""
         if hasattr(self, "_delegate"):
             return self._delegate.get_mcp_server_count()
-        
-        # Count configured endpoints in MultiEndpointMCPRouter
-        if hasattr(self.mcp_router, 'mcp_client'):
-            # MultiEndpointMCPRouter has mcp_client with system_endpoint and spotify_endpoint
-            client = getattr(self.mcp_router, 'mcp_client', None)
-            count = 0
-            if client and getattr(client, 'system_endpoint', None):
-                count += 1
-            if client and getattr(client, 'spotify_endpoint', None):
-                count += 1
-            return count
-        
-        # Fallback for single-endpoint router
+        if hasattr(self.mcp_router, "mcp_client"):
+            client = getattr(self.mcp_router, "mcp_client", None)
+            return sum([
+                bool(client and getattr(client, "system_endpoint", None)),
+                bool(client and getattr(client, "spotify_endpoint", None)),
+            ])
         return 1
 
     def register_context_artifact(self, name: str, values: list[float], source_dtype: str = "fp32") -> dict:

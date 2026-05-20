@@ -1,6 +1,7 @@
 """Agent-specific configuration."""
 
 import os
+from pathlib import Path
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -8,6 +9,20 @@ from .context_dtype import SUPPORTED_CONTEXT_DTYPES
 from .llm_config import LLMConfig, OpenAIConfig
 from .mcp_config import MCPConfig
 from .cache_config import CacheConfig
+
+# Default prompt file — sits next to this module
+_DEFAULT_PROMPT_FILE = Path(__file__).parent / "system_prompt.md"
+_FALLBACK_PROMPT = "You are JARVIS, an intelligent AI assistant. Be concise and helpful."
+
+
+def _load_system_prompt() -> str:
+    """Load system prompt from env-override path, local file, or inline fallback."""
+    env_path = os.getenv("JARVIS_SYSTEM_PROMPT_PATH")
+    if env_path and Path(env_path).exists():
+        return Path(env_path).read_text(encoding="utf-8").strip()
+    if _DEFAULT_PROMPT_FILE.exists():
+        return _DEFAULT_PROMPT_FILE.read_text(encoding="utf-8").strip()
+    return _FALLBACK_PROMPT
 
 
 class AgentConfig(BaseModel):
@@ -18,49 +33,11 @@ class AgentConfig(BaseModel):
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     cache: CacheConfig = Field(default_factory=CacheConfig)
 
-    system_prompt: str = Field(
-        default="""You are JARVIS, an intelligent AI assistant for desktop automation.
+    system_prompt: str = Field(default_factory=_load_system_prompt)
 
-CRITICAL INSTRUCTIONS:
-- You operate using the ReAct (Reasoning + Acting) framework.
-- If a request requires multiple steps or tools, explain your internal reasoning step-by-step before calling a tool.
-- If the tool succeeds, your action is complete (the system will show the output to the user).
-- ONLY output a direct message to the user if you are answering a general question or reporting an error.
-- Be concise, clear, and natural.
-
-You can help with:
-- System information (CPU, RAM, storage, network status)
-- Volume control (up, down, mute, set level)
-- Spotify playback control (play, pause, skip, search for music)
-- Spotify authentication (login status, login URL generation)
-- WiFi and Bluetooth management
-- File operations and organization
-
-CRITICAL PATH RESOLUTION:
-ALWAYS do this FIRST when user mentions any folder:
-1. Call "resolve_path" with the folder name (downloads, documents, desktop, home, or project)
-2. Use the resolved_path returned by that tool for any file operations
-3. NEVER guess or construct paths manually
-
-SPOTIFY PROTOCOL (STRICT ENFORCEMENT):
-For ANY Spotify-related request:
-1. If the user wants to play a SPECIFIC song, artist, or playlist:
-   a. You MUST call "searchSpotify" first to search for the requested item.
-   b. Extract the "uri" from the search results.
-   c. Call "playMusic" and pass the "uri" exactly as found. Do not pass just a name or id.
-2. If the user wants to add a track to a playlist:
-   a. Call "searchSpotify" to get the track "uri".
-   b. Call "addTracksToPlaylist" with "playlistId" and "trackIds" set to an ARRAY containing the track's id (e.g. `trackIds: ["abc..."]`).
-3. If the user wants to see what's playing or their queue:
-   a. Call "getNowPlaying" or "getQueue" directly.
-4. If a Spotify tool returns an error related to authentication, tell the user to run the authentication flow.
-
-NEVER attempt to play a specific song without searching for its URI first.
-
-RESPONSE FORMAT:
-- Respond directly with what the user needs to know
-- No meta-commentary or step-by-step explanations
-- Example: User says "Play X" -> You check status -> if fail, call authorize tool -> if pass, call search/play tools."""
+    # User-facing fallback when the LLM fails entirely
+    fallback_message: str = Field(
+        default="I'm not sure how to help with that. Try rephrasing or type ? for help."
     )
 
     debug: bool = Field(default=False)

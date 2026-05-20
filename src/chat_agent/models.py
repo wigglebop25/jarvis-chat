@@ -59,6 +59,7 @@ class IntentType(str, Enum):
     PATH_RESOLVE = "path_resolve"
     BLUETOOTH_CONTROL = "bluetooth_control"
     SPOTIFY_INFO = "spotify_info"
+    SHOW_TOOLS = "show_tools"
     GENERAL_QUERY = "general_query"
     UNKNOWN = "unknown"
 

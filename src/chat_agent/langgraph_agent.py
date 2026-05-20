@@ -141,7 +141,7 @@ class LangGraphChatAgent:
                 "agent_config": self.config,
                 "llm_config": self.llm_config,
                 "session_id": self.session_id,
-                "tools_payload": self._tool_definitions if self.llm_provider and self.llm_provider.supports_tools else None
+                "tools_payload": self._tool_definitions
             }
         }
         
