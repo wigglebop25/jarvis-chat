@@ -6,13 +6,12 @@ Console, theme management, banner and prompt helpers.
 import asyncio
 import threading
 from importlib.metadata import version as _pkg_version, PackageNotFoundError
+from pathlib import Path
+import tomllib
 import questionary
 from rich.console import Console
 
 console = Console()
-
-from pathlib import Path
-import tomllib
 
 def _load_version() -> str:
     try:
