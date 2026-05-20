@@ -1,8 +1,9 @@
 """Execute tools and handle errors."""
 
 import logging
+import re
 from typing import Any, Dict, Optional
-from langchain_core.messages import AIMessage, ToolMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
 from ...mcp.router_protocol import MCPRouterLike
@@ -12,10 +13,49 @@ from ..state import AgentState
 logger = logging.getLogger(__name__)
 
 
+def _latest_user_text(state: AgentState) -> str:
+    for message in reversed(state["messages"]):
+        if isinstance(message, HumanMessage):
+            return str(message.content or "")
+    return ""
+
+
+def _normalize_search_spotify_args(tool_args: dict[str, Any], user_text: str) -> dict[str, Any]:
+    args = dict(tool_args or {})
+
+    query = args.get("query")
+    if not isinstance(query, str) or not query.strip() or query.strip().lower() in {"undefined", "null"}:
+        for alias in ("q", "name", "text"):
+            alias_value = args.get(alias)
+            if isinstance(alias_value, str) and alias_value.strip():
+                query = alias_value
+                break
+
+    if (not isinstance(query, str) or not query.strip()) and user_text:
+        playlist_match = re.search(r"playlist\s+(.+)$", user_text, re.IGNORECASE)
+        if playlist_match:
+            query = playlist_match.group(1).strip()
+        else:
+            query = user_text.strip()
+
+    if isinstance(query, str):
+        normalized_query = re.sub(r"^(play|music|in|the|playlist)\s+", "", query.strip(), flags=re.IGNORECASE)
+        args["query"] = normalized_query or query.strip()
+
+    search_type = args.get("type")
+    if not isinstance(search_type, str) or not search_type.strip():
+        source_text = f"{args.get('query', '')} {user_text}".lower()
+        args["type"] = "playlist" if "playlist" in source_text else "track"
+
+    return args
+
+
 async def execute_tools_node(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
     """
     Node that executes tool calls.
-    Special handling for playMusic: checks queue first to avoid clearing it.
+    
+    In the ReAct framework, this node represents the "Action" step.
+    The output (ToolMessage) serves as the "Observation" for the next iteration.
     """
     configurable = config.get("configurable", {})
     mcp_router: Optional[MCPRouterLike] = configurable.get("mcp_router")
@@ -29,11 +69,15 @@ async def execute_tools_node(state: AgentState, config: RunnableConfig) -> Dict[
         
     new_messages = []
     execution_error = None
+    user_text = _latest_user_text(state)
     
     for tool_call in last_message.tool_calls:
         tool_name = tool_call["name"]
-        tool_args = tool_call["args"]
+        tool_args = dict(tool_call["args"] or {})
         tool_call_id = tool_call["id"]
+
+        if tool_name == "searchSpotify":
+            tool_args = _normalize_search_spotify_args(tool_args, user_text)
         
         # Special handling for playMusic to preserve queue
         if tool_name == "playMusic" and tool_args.get("type") == "track":

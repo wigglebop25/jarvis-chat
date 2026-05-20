@@ -1,5 +1,6 @@
 """Shared helper functions for graph nodes."""
 
+import re
 from typing import Any, Dict, Tuple, Optional, cast
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
@@ -13,6 +14,7 @@ from ..state import AgentState
 
 REASONING_LEAKAGE_MARKERS = (
     "the user is asking",
+    "the user wants",
     "i should",
     "i need to",
     "looking back at",
@@ -22,6 +24,19 @@ REASONING_LEAKAGE_MARKERS = (
 def sanitize_assistant_text(text: str) -> str:
     """Remove reasoning leakage from assistant text."""
     cleaned = (text or "").strip()
+    if not cleaned:
+        return cleaned
+
+    cleaned = re.sub(
+        r"--- TOOL EXECUTION RESULT ---.*?-----------------------------",
+        "",
+        cleaned,
+        flags=re.DOTALL,
+    ).strip()
+
+    if cleaned.startswith("{") and cleaned.endswith("}"):
+        return "I completed that step, but couldn't produce a clean final message. Please rephrase the request."
+
     lowered = cleaned.lower()
     if not cleaned or not any(marker in lowered for marker in REASONING_LEAKAGE_MARKERS):
         return cleaned
@@ -69,7 +84,8 @@ def get_context_filtered_messages(state: AgentState, config: RunnableConfig) -> 
     # Inject RAG context if available
     rag_context = state.get("rag_context")
     if rag_context:
-        system_prompt = f"{system_prompt}\n\n[RELEVANT CONTEXT]\n{rag_context}"
+        # Use delimiters for better RAG integration
+        system_prompt = f"{system_prompt}\n\n[RETRIEVED CONTEXT]\n{rag_context}\n[END CONTEXT]"
 
     if context_cache:
         # Sync latest state to cache
@@ -80,6 +96,7 @@ def get_context_filtered_messages(state: AgentState, config: RunnableConfig) -> 
                 role = "user"
             elif isinstance(m, SystemMessage):
                 role = "system"
+                continue # Skip existing system messages as we provide a new one
             elif isinstance(m, ToolMessage):
                 role = "tool"
             content = cast(str, m.content)
@@ -87,7 +104,14 @@ def get_context_filtered_messages(state: AgentState, config: RunnableConfig) -> 
             
         return context_cache.build_messages(session_id, system_prompt)
     
-    return map_to_provider_messages(state["messages"])
+    # Ensure system prompt is at the start of messages if not using context_cache
+    messages = map_to_provider_messages(state["messages"])
+    
+    # Filter out any existing system messages to avoid duplicates
+    messages = [m for m in messages if m.get("role") != MessageRole.SYSTEM.value]
+    
+    # Prepend the updated system prompt
+    return [{"role": MessageRole.SYSTEM.value, "content": system_prompt}] + messages
 
 
 def cache_lookup(state: AgentState, config: RunnableConfig) -> Tuple[Optional[str], Optional[Tuple[str, str, str]]]:

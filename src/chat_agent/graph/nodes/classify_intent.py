@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 async def classify_intent_node(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
     """
     Node that retrieves RAG context based on the current intent and query.
+    
+    This represents the "Retrieval" and "Augmentation" steps of the RAG pipeline.
+    The retrieved context is added to the state and later injected into the prompt.
     """
     logger.info("[LangGraph] Entering classify_intent_node")
     configurable = config.get("configurable", {})
