@@ -3,6 +3,7 @@ import os
 import json
 import logging
 import asyncio
+from pathlib import Path
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -22,11 +23,22 @@ class CustomResult(BaseModel):
 class StdioMCPClient:
     """Stdio-based client for MCP communication using the official SDK."""
 
-    def __init__(self, command: str, args: list[str], timeout: int = 30):
+    def __init__(
+        self,
+        command: str,
+        args: list[str],
+        timeout: int = 30,
+        cwd: str | Path | None = None,
+        env: Optional[dict[str, str]] = None,
+    ):
+        merged_env = os.environ.copy()
+        if env:
+            merged_env.update({k: str(v) for k, v in env.items() if v is not None})
         self.server_params = StdioServerParameters(
             command=command,
             args=args,
-            env=os.environ.copy()
+            env=merged_env,
+            cwd=cwd,
         )
         self.timeout = timeout
         self.session: Optional[ClientSession] = None
@@ -40,7 +52,12 @@ class StdioMCPClient:
             if self.session:
                 return
 
-            logger.info(f"Connecting to MCP server: {self.server_params.command} {' '.join(self.server_params.args)}")
+            logger.info(
+                "Connecting to MCP server: %s %s (cwd=%s)",
+                self.server_params.command,
+                " ".join(self.server_params.args),
+                self.server_params.cwd or "<inherit>",
+            )
             
             self._context_manager = stdio_client(self.server_params)
             self._read, self._write = await self._context_manager.__aenter__()

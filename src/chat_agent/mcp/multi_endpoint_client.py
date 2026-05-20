@@ -8,11 +8,57 @@ Supports multiple endpoints for different tool groups (system, spotify, etc).
 import logging
 from typing import Any, Optional
 import os
+import json
+from pathlib import Path
 
 from .client import MCPClient
 from .stdio_client import StdioMCPClient
 
 logger = logging.getLogger(__name__)
+
+SPOTIFY_TOOL_NAMES = {
+    "searchSpotify",
+    "getNowPlaying",
+    "getMyPlaylists",
+    "getPlaylistTracks",
+    "getRecentlyPlayed",
+    "getUsersSavedTracks",
+    "removeUsersSavedTracks",
+    "getQueue",
+    "getAvailableDevices",
+    "playMusic",
+    "pausePlayback",
+    "resumePlayback",
+    "skipToNext",
+    "skipToPrevious",
+    "createPlaylist",
+    "addTracksToPlaylist",
+    "addToQueue",
+    "setVolume",
+    "adjustVolume",
+    "getAlbums",
+    "getAlbumTracks",
+    "saveOrRemoveAlbumForUser",
+    "checkUsersSavedAlbums",
+    "getPlaylist",
+    "updatePlaylist",
+    "removeTracksFromPlaylist",
+    "reorderPlaylistItems",
+}
+
+
+def _workspace_root() -> Path:
+    """Resolve the workspace root that contains jarvis-chat, jarvis-skills, and spotify-mcp-server."""
+    return Path(__file__).resolve().parents[4]
+
+
+def _resolve_path(value: str | Path | None, base_dir: Path) -> str | None:
+    if value is None:
+        return None
+    path = Path(value)
+    if path.is_absolute():
+        return str(path)
+    return str((base_dir / path).resolve())
 
 class MultiEndpointMCPClient:
     """Routes MCP calls to different endpoints based on tool name/category."""
@@ -42,10 +88,80 @@ class MultiEndpointMCPClient:
     def _create_client(self, endpoint: str, transport: str, prefix: str) -> Any:
         transport = transport.lower()
         if transport == "stdio":
-            command = os.getenv(f"{prefix}_MCP_COMMAND", "node" if prefix == "SPOTIFY" else "cargo")
-            args_str = os.getenv(f"{prefix}_MCP_ARGS", "")
-            args = args_str.split() if args_str else []
-            return StdioMCPClient(command=command, args=args, timeout=self.timeout)
+            # Priority: explicit env vars -> MCP_CONFIG_PATH or jarvis-skills/mcp.json -> defaults
+            env_cmd = os.getenv(f"{prefix}_MCP_COMMAND")
+            env_args = os.getenv(f"{prefix}_MCP_ARGS")
+            env_cwd = os.getenv(f"{prefix}_MCP_CWD")
+            command: str
+            args: list[str]
+            cwd: str | Path | None
+            extra_env: dict[str, str] | None
+            if env_cmd:
+                command = env_cmd.strip()
+                args = [arg for arg in (env_args.split() if env_args else []) if arg]
+                cwd = env_cwd
+                extra_env = None
+            else:
+                # Try MCP_CONFIG_PATH then common repo locations
+                mcp_config = os.getenv("MCP_CONFIG_PATH")
+                candidates = [mcp_config] if mcp_config else []
+                candidates += ["mcp.json", "../jarvis-skills/mcp.json", "jarvis-skills/mcp.json"]
+                found = None
+                for c in candidates:
+                    if not c:
+                        continue
+                    p = Path(c)
+                    if p.exists():
+                        found = p
+                        break
+                if found:
+                    try:
+                        data = json.loads(found.read_text(encoding="utf-8"))
+                        servers = data.get("mcpServers", {})
+                        key = "spotify" if prefix == "SPOTIFY" else "jarvis-skills"
+                        entry = servers.get(key, {})
+                        command = str(entry.get("command") or ("node" if prefix == "SPOTIFY" else "cargo"))
+                        args = [str(arg) for arg in (entry.get("args", []) or []) if arg is not None]
+                        cwd = env_cwd or entry.get("cwd")
+                        raw_env = entry.get("env") or None
+                        extra_env = {str(k): str(v) for k, v in raw_env.items()} if isinstance(raw_env, dict) else None
+                    except Exception:
+                        command = os.getenv(f"{prefix}_MCP_COMMAND", "node" if prefix == "SPOTIFY" else "cargo").strip()
+                        args = [arg for arg in (os.getenv(f"{prefix}_MCP_ARGS", "").split()) if arg]
+                        cwd = env_cwd
+                        extra_env = None
+                else:
+                    command = os.getenv(f"{prefix}_MCP_COMMAND", "node" if prefix == "SPOTIFY" else "cargo").strip()
+                    args = [arg for arg in (os.getenv(f"{prefix}_MCP_ARGS", "").split()) if arg]
+                    cwd = env_cwd
+                    extra_env = None
+
+            base_dir = _workspace_root()
+            resolved_cwd = _resolve_path(cwd, base_dir) if cwd else None
+            resolved_command = _resolve_path(command, base_dir) if (os.sep in command or "/" in command or "\\" in command) else command
+            if resolved_command is None:
+                resolved_command = command
+
+            resolved_args: list[str] = []
+            for arg in args:
+                resolved_arg = _resolve_path(arg, base_dir) if (os.sep in arg or "/" in arg or "\\" in arg) else arg
+                if resolved_arg is None:
+                    resolved_arg = arg
+                resolved_args.append(resolved_arg)
+            logger.info(
+                "Configured %s MCP stdio client: command=%s cwd=%s",
+                prefix.lower(),
+                resolved_command,
+                resolved_cwd or "<inherit>",
+            )
+
+            return StdioMCPClient(
+                command=resolved_command,
+                args=resolved_args,
+                timeout=self.timeout,
+                cwd=resolved_cwd,
+                env=extra_env,
+            )
         else:
             return MCPClient(base_url=endpoint, timeout=self.timeout)
 
@@ -105,7 +221,11 @@ class MultiEndpointMCPClient:
             if client:
                 return await client.call(method, params, timeout)
             
-            # Fallback to system if not registered (maybe list wasn't called)
+            if tool_name in SPOTIFY_TOOL_NAMES:
+                logger.info(f"Tool {tool_name} not in registry, using spotify client fallback")
+                return await self.spotify_client.call(method, params, timeout)
+
+            # Fallback to system if not registered
             logger.warning(f"Tool {tool_name} not in registry, falling back to system client")
             return await self.system_client.call(method, params, timeout)
 
