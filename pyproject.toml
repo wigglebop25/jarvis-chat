@@ -1,6 +1,6 @@
 [project]
 name = "jarvis-chat"
-version = "0.1.0"
+version = "0.6.7"
 description = "JARVIS Chat Client - Processes voice transcripts and routes to MCP tools"
 requires-python = ">=3.13"
 dependencies = [
