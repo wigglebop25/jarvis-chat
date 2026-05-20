@@ -8,8 +8,30 @@ for consistent presentation to LLM and user.
 from typing import Any
 
 
+def _extract_mcp_text(result: Any) -> str | None:
+    if not isinstance(result, dict):
+        return None
+    content = result.get("content")
+    if not isinstance(content, list):
+        return None
+    lines: list[str] = []
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        if isinstance(text, str) and text.strip():
+            lines.append(text.strip())
+    if not lines:
+        return None
+    return "\n".join(lines)
+
+
 def format_tool_result(tool_name: str, result: Any) -> str:
     """Format a tool execution result into a human-readable string."""
+    mcp_text = _extract_mcp_text(result)
+    if tool_name in {"getMyPlaylists", "getQueue", "getNowPlaying", "searchSpotify"} and mcp_text:
+        return mcp_text
+
     if tool_name == "get_system_info" and isinstance(result, dict):
         lines: list[str] = []
 

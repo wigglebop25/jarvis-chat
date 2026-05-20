@@ -7,6 +7,7 @@ connection errors with configurable exponential backoff strategy.
 
 import asyncio
 import logging
+import random
 from typing import Awaitable, Callable, TypeVar
 
 logger = logging.getLogger(__name__)
@@ -21,8 +22,18 @@ RETRIABLE_EXCEPTIONS = (
 )
 
 
-class MCPRateLimitError(RuntimeError):
+class RateLimitError(RuntimeError):
     """Raised when rate limit (429) is encountered."""
+    pass
+
+
+class RetryExceededError(RuntimeError):
+    """Raised when maximum retries are exceeded."""
+    pass
+
+
+class MCPRateLimitError(RateLimitError):
+    """Raised when MCP rate limit is encountered."""
     pass
 
 
@@ -37,6 +48,8 @@ async def async_retry_with_backoff(
     max_retries: int = 3,
     base_delay: float = 1.0,
     backoff_factor: float = 2.0,
+    jitter: bool = True,
+    retryable_exceptions: tuple = (RateLimitError, asyncio.TimeoutError, ConnectionError, TimeoutError),
     **kwargs,
 ) -> T:
     """
@@ -51,96 +64,48 @@ async def async_retry_with_backoff(
         max_retries: Maximum number of retries (default 3)
         base_delay: Initial delay in seconds (default 1.0)
         backoff_factor: Multiplier for exponential backoff (default 2.0)
+        jitter: Whether to add random jitter to delay
+        retryable_exceptions: Tuple of exceptions that should trigger a retry
         **kwargs: Keyword arguments for coro_func
     
     Returns:
         Result from successful call to coro_func
-    
-    Raises:
-        MCPRateLimitError: If rate limit exceeded after all retries
-        MCPTimeoutError: If timeout occurs
-        Exception: Any other exception that occurs on the final attempt
-    
-    Example:
-        >>> async def fetch_data(url):
-        ...     return await client.get(url)
-        >>> result = await async_retry_with_backoff(
-        ...     fetch_data,
-        ...     "https://api.example.com/data",
-        ...     max_retries=4,
-        ...     base_delay=1.0,
-        ... )
     """
     last_exception = None
     
-    for attempt in range(max_retries):
+    for attempt in range(max_retries + 1):
         try:
-            logger.debug(
-                f"Calling {coro_func.__name__} (attempt {attempt + 1}/{max_retries})"
-            )
-            result = await coro_func(*args, **kwargs)
-            
-            # Reset logger if we succeeded after retries
             if attempt > 0:
                 logger.debug(
-                    f"Successfully called {coro_func.__name__} after {attempt} retries"
+                    f"Calling {coro_func.__name__} (attempt {attempt + 1}/{max_retries + 1})"
                 )
-            
-            return result
+            return await coro_func(*args, **kwargs)
         
-        except MCPRateLimitError as e:
-            # Rate limit errors should always retry (unless final attempt)
+        except retryable_exceptions as e:
             last_exception = e
-            if attempt < max_retries - 1:
+            if attempt < max_retries:
                 wait_seconds = base_delay * (backoff_factor ** attempt)
+                if jitter:
+                    wait_seconds += random.uniform(0, wait_seconds * 0.1)
+                
                 logger.warning(
-                    f"Rate limit hit on attempt {attempt + 1}/{max_retries}, "
-                    f"waiting {wait_seconds}s before retry"
+                    f"Retryable error {type(e).__name__} hit on attempt {attempt + 1}/{max_retries + 1}, "
+                    f"waiting {wait_seconds:.2f}s before retry: {e}"
                 )
                 await asyncio.sleep(wait_seconds)
                 continue
             else:
                 logger.error(
-                    f"Rate limit exceeded after {max_retries} retries for "
-                    f"{coro_func.__name__}"
+                    f"Max retries ({max_retries}) exceeded for {coro_func.__name__}. Last error: {e}"
                 )
-                raise
-        
-        except (asyncio.TimeoutError, TimeoutError) as e:
-            # Timeout errors should retry
-            last_exception = e
-            if attempt < max_retries - 1:
-                wait_seconds = base_delay * (backoff_factor ** attempt)
-                logger.warning(
-                    f"Timeout on attempt {attempt + 1}/{max_retries}, "
-                    f"waiting {wait_seconds}s before retry"
-                )
-                await asyncio.sleep(wait_seconds)
-                continue
-            else:
-                logger.error(
-                    f"Timeout exceeded for {coro_func.__name__} after {max_retries} retries"
-                )
-                raise MCPTimeoutError(
-                    f"Call to {coro_func.__name__} timed out after {max_retries} retries"
-                ) from e
-        
-        except ConnectionError as e:
-            # Connection errors should retry
-            last_exception = e
-            if attempt < max_retries - 1:
-                wait_seconds = base_delay * (backoff_factor ** attempt)
-                logger.warning(
-                    f"Connection error on attempt {attempt + 1}/{max_retries}, "
-                    f"waiting {wait_seconds}s before retry: {e}"
-                )
-                await asyncio.sleep(wait_seconds)
-                continue
-            else:
-                logger.error(
-                    f"Connection failed for {coro_func.__name__} after {max_retries} retries: {e}"
-                )
-                raise
+                # Task 13: Generic error for new callers, but maintain specific 
+                # error raising for existing tests/logic that expect them.
+                if isinstance(e, MCPRateLimitError):
+                    raise e
+                if isinstance(e, (asyncio.TimeoutError, TimeoutError)):
+                    raise MCPTimeoutError(f"Call to {coro_func.__name__} timed out after {max_retries} retries") from e
+                
+                raise RetryExceededError(f"Failed after {max_retries} retries: {e}") from e
         
         except Exception as e:
             # Other exceptions: log and re-raise immediately
@@ -149,42 +114,7 @@ async def async_retry_with_backoff(
             )
             raise
     
-    # Fallback (should not reach here, but just in case)
+    # Fallback
     if last_exception:
         raise last_exception
     raise RuntimeError(f"Unexpected error: no exception to raise after {max_retries} attempts")
-
-
-def create_retry_decorator(
-    max_retries: int = 3,
-    base_delay: float = 1.0,
-    backoff_factor: float = 2.0,
-):
-    """
-    Create a decorator for retrying async functions with exponential backoff.
-    
-    Args:
-        max_retries: Maximum number of retries
-        base_delay: Initial delay in seconds
-        backoff_factor: Multiplier for exponential backoff
-    
-    Returns:
-        Decorator function
-    
-    Example:
-        >>> @create_retry_decorator(max_retries=4, base_delay=0.5)
-        ... async def fetch_data(url):
-        ...     return await client.get(url)
-    """
-    def decorator(func: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]:
-        async def wrapper(*args, **kwargs) -> T:
-            return await async_retry_with_backoff(
-                func,
-                *args,
-                max_retries=max_retries,
-                base_delay=base_delay,
-                backoff_factor=backoff_factor,
-                **kwargs,
-            )
-        return wrapper
-    return decorator

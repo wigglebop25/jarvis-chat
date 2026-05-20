@@ -57,7 +57,9 @@ class ToolSchemaConverter:
         return {
             "name": tool.get("name"),
             "description": tool.get("description", ""),
-            "parameters": ToolSchemaConverter._convert_parameters(tool.get("parameters", {})),
+            "parameters": ToolSchemaConverter._sanitize_gemini_schema(
+                ToolSchemaConverter._convert_parameters(tool.get("parameters", {}))
+            ),
         }
 
     @staticmethod
@@ -110,9 +112,75 @@ class ToolSchemaConverter:
             converted["default"] = prop_def["default"]
 
         if "items" in prop_def:
-            converted["items"] = ToolSchemaConverter._convert_property(prop_def["items"])
+            items = prop_def["items"]
+            if isinstance(items, dict):
+                converted["items"] = ToolSchemaConverter._convert_property(items)
+            else:
+                converted["items"] = items
+
+        if "properties" in prop_def:
+            converted["properties"] = {
+                name: ToolSchemaConverter._convert_property(value)
+                for name, value in prop_def["properties"].items()
+                if isinstance(value, dict)
+            }
+
+        if "required" in prop_def:
+            converted["required"] = prop_def["required"]
+
+        # Gemini's schema proto does not accept `additionalProperties`.
+        # We intentionally drop it while preserving closed-world validation in
+        # the local validator and the original MCP schema.
 
         return converted
+
+    @staticmethod
+    def _sanitize_gemini_schema(schema: Any) -> Any:
+        """Remove JSON Schema fields that the Gemini proto does not accept."""
+        if isinstance(schema, dict):
+            allowed_keys = {
+                "type",
+                "properties",
+                "required",
+                "items",
+                "enum",
+                "description",
+                "default",
+                "oneOf",
+                "anyOf",
+                "allOf",
+                "const",
+            }
+            sanitized: dict[str, Any] = {}
+            for key, value in schema.items():
+                if key not in allowed_keys:
+                    continue
+                if key == "properties" and isinstance(value, dict):
+                    sanitized[key] = {
+                        prop_name: ToolSchemaConverter._sanitize_gemini_schema(prop_schema)
+                        for prop_name, prop_schema in value.items()
+                        if isinstance(prop_schema, dict)
+                    }
+                elif key in {"items", "oneOf", "anyOf", "allOf"}:
+                    if isinstance(value, list):
+                        sanitized[key] = [
+                            ToolSchemaConverter._sanitize_gemini_schema(item)
+                            for item in value
+                            if isinstance(item, dict)
+                        ]
+                    elif isinstance(value, dict):
+                        sanitized[key] = ToolSchemaConverter._sanitize_gemini_schema(value)
+                else:
+                    sanitized[key] = ToolSchemaConverter._sanitize_gemini_schema(value)
+            return sanitized
+
+        if isinstance(schema, list):
+            return [
+                ToolSchemaConverter._sanitize_gemini_schema(item)
+                for item in schema
+            ]
+
+        return schema
 
 
 # Runtime validation helpers
